@@ -1,0 +1,24 @@
+# ESP-IDF build output and caches
+/build/
+**/__pycache__/
+*.py[cod]
+
+# Generated configuration and component-manager downloads
+/sdkconfig
+/sdkconfig.old
+/managed_components/
+
+# Credentials and local TLS material.
+# main/admin_cert.h embeds the administration private key.
+/main/admin_cert.h
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+*.secret
+/credentials/
+/secrets/
+
+.DS_Store

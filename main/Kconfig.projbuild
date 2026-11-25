@@ -1,0 +1,69 @@
+menu "Desktop Companion"
+
+    config COMPANION_FOCUS_SECONDS
+        int "Focus duration in seconds"
+        default 1500
+        range 5 7200
+
+    config COMPANION_BREAK_SECONDS
+        int "Break duration in seconds"
+        default 300
+        range 5 3600
+
+    config COMPANION_CELEBRATE_SECONDS
+        int "Celebration duration in seconds"
+        default 3
+        range 1 30
+
+    config COMPANION_TIMEZONE
+        string "POSIX timezone"
+        default "CST-8"
+
+    config COMPANION_NTP_SERVER
+        string "NTP server"
+        default "ntp.aliyun.com"
+
+    config COMPANION_OTA_ALLOW_HTTP
+        bool "Allow plaintext HTTP OTA (development only)"
+        default n
+
+    config COMPANION_AP_PASSWORD
+        string "Setup AP password"
+        default "deskpal1"
+
+    config PAD_DEFAULT_BRIGHTNESS
+        int "Default backlight brightness percent"
+        default 75
+        range 5 100
+
+    config PAD_CAL_R_GAIN
+        int "Red calibration gain percent"
+        default 100
+        range 50 150
+
+    config PAD_CAL_G_GAIN
+        int "Green calibration gain percent"
+        default 100
+        range 50 150
+
+    config PAD_CAL_B_GAIN
+        int "Blue calibration gain percent"
+        default 100
+        range 50 150
+
+    config PAD_CAL_R_OFFSET
+        int "Red calibration offset"
+        default 0
+        range -32 32
+
+    config PAD_CAL_G_OFFSET
+        int "Green calibration offset"
+        default 0
+        range -32 32
+
+    config PAD_CAL_B_OFFSET
+        int "Blue calibration offset"
+        default 0
+        range -32 32
+
+endmenu

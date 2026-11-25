@@ -1,0 +1,29 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "companion_model.c"
+        "companion_timer.c"
+        "companion_ui.c"
+        "config_store.c"
+        "lcd.c"
+        "network.c"
+        "ota.c"
+        "provisioning.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        app_update
+        driver
+        esp_event
+        esp_http_client
+        esp_http_server
+        esp_https_server
+        esp_lcd
+        esp_netif
+        esp_partition
+        esp_timer
+        esp_wifi
+        json
+        mbedtls
+        mdns
+        nvs_flash
+)

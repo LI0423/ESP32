@@ -5,6 +5,7 @@
 #include "companion_model.h"
 #include "companion_progress.h"
 #include "companion_schedule.h"
+#include "companion_serial.h"
 #include "companion_timer.h"
 #include "companion_ui.h"
 #include "config_store.h"
@@ -168,6 +169,65 @@ static void ui_task(void *arg)
     }
 }
 
+static void print_serial_line(const char *text)
+{
+    xSemaphoreTake(s_output_lock, portMAX_DELAY);
+    fputs(text, stdout);
+    fflush(stdout);
+    xSemaphoreGive(s_output_lock);
+}
+
+/* USB serial: same effects as the settings page, persisted to NVS. */
+static void handle_serial_command(const char *line)
+{
+    companion_serial_result_t result;
+    companion_serial_parse(line, &result);
+    switch (result.command) {
+    case COMPANION_SERIAL_CMD_UNKNOWN:
+        break;
+    case COMPANION_SERIAL_CMD_INVALID:
+        print_serial_line("error: usage: goal <1-99> | focus | standby | status | token\n");
+        break;
+    case COMPANION_SERIAL_CMD_TOKEN: {
+        companion_config_t current;
+        if (companion_config_get(&current) == ESP_OK) {
+            char ack[128];
+            snprintf(ack, sizeof(ack), "Admin token: %s\n", current.admin_token);
+            print_serial_line(ack);
+        }
+        break;
+    }
+    case COMPANION_SERIAL_CMD_STATUS:
+        publish_status();
+        break;
+    case COMPANION_SERIAL_CMD_GOAL: {
+        esp_err_t err = companion_config_set_daily_goal((uint8_t)result.goal);
+        if (err != ESP_OK) {
+            char ack[96];
+            snprintf(ack, sizeof(ack), "error: goal save failed: %s\n", esp_err_to_name(err));
+            print_serial_line(ack);
+            break;
+        }
+        companion_model_set_daily_goal(result.goal);
+        char ack[32];
+        snprintf(ack, sizeof(ack), "goal %lu saved\n", (unsigned long)result.goal);
+        print_serial_line(ack);
+        publish_status();
+        break;
+    }
+    case COMPANION_SERIAL_CMD_FOCUS:
+        companion_model_start_fresh_focus();
+        print_serial_line("focus started\n");
+        publish_status();
+        break;
+    case COMPANION_SERIAL_CMD_STANDBY:
+        companion_model_standby_until_morning();
+        print_serial_line("standby until next 08:00\n");
+        publish_status();
+        break;
+    }
+}
+
 void app_main(void)
 {
     s_output_lock = xSemaphoreCreateMutex();
@@ -230,7 +290,7 @@ void app_main(void)
     printf("Automatic focus/break timer; no physical controls.\n\n");
     fflush(stdout);
 
-    char command[32];
+    char command[COMPANION_SERIAL_LINE_MAX];
     size_t command_length = 0;
     for (;;) {
         char chunk[64];
@@ -242,13 +302,7 @@ void app_main(void)
         for (ssize_t i = 0; i < count; i++) {
             if (chunk[i] == '\n' || chunk[i] == '\r') {
                 command[command_length] = '\0';
-                if (!strcmp(command, "token")) {
-                    companion_config_t current;
-                    if (companion_config_get(&current) == ESP_OK)
-                        printf("Admin token: %s\n", current.admin_token);
-                } else if (!strcmp(command, "status")) {
-                    publish_status();
-                }
+                handle_serial_command(command);
                 command_length = 0;
             } else if (command_length < sizeof(command) - 1) {
                 command[command_length++] = chunk[i];

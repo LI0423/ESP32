@@ -9,6 +9,7 @@ cc -std=c17 -Wall -Wextra -Werror -I"$ROOT/main" \
   "$ROOT/tools/test_companion_timer.c" \
   "$ROOT/main/companion_timer.c" \
   "$ROOT/main/companion_schedule.c" \
+  "$ROOT/main/companion_serial.c" \
   "$ROOT/main/companion_progress.c" \
   -o "$BIN"
 "$BIN"

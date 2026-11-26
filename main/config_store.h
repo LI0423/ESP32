@@ -45,6 +45,7 @@ esp_err_t companion_config_get(companion_config_t *out);
 esp_err_t companion_config_set(const companion_config_t *config);
 esp_err_t companion_config_set_wifi(const char *ssid, const char *password, bool clear_password);
 esp_err_t companion_config_set_brightness(uint8_t brightness);
+esp_err_t companion_config_set_daily_goal(uint8_t daily_goal);
 esp_err_t companion_config_validate(const companion_config_t *config);
 bool companion_config_has_wifi(void);
 bool companion_config_url_valid(const char *url);

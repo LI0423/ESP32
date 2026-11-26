@@ -8,6 +8,7 @@
 
 #include "companion_progress.h"
 #include "companion_schedule.h"
+#include "companion_serial.h"
 #include "companion_timer.h"
 #include "deskpal_font.h"
 #include "deskpal_sprites.h"
@@ -381,6 +382,53 @@ static void test_manual_focus_override_boundary(void)
     assert(!companion_should_auto_resume(true, night, true, true, now, until));
 }
 
+static void test_serial_commands(void)
+{
+    companion_serial_result_t result;
+
+    companion_serial_parse("goal 1", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_GOAL && result.goal == 1);
+    companion_serial_parse("goal 99", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_GOAL && result.goal == 99);
+    companion_serial_parse("goal 4", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_GOAL && result.goal == 4);
+    companion_serial_parse("focus", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_FOCUS);
+    companion_serial_parse("standby", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_STANDBY);
+    companion_serial_parse("token", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_TOKEN);
+    companion_serial_parse("status", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_STATUS);
+
+    /* CRLF and surrounding whitespace are tolerated. */
+    companion_serial_parse("goal 6\r\n", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_GOAL && result.goal == 6);
+    companion_serial_parse("  goal\t7  ", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_GOAL && result.goal == 7);
+    companion_serial_parse("\r\n", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_UNKNOWN);
+    companion_serial_parse("  status  \r\n", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_STATUS);
+
+    /* Rejected goals change nothing. */
+    static const char *bad_goals[] = {
+        "goal 0", "goal 100", "goal", "goal abc", "goal 6 1", "goal -1", "goal 1e2", "goal 000",
+    };
+    for (size_t i = 0; i < sizeof(bad_goals) / sizeof(bad_goals[0]); i++) {
+        companion_serial_parse(bad_goals[i], &result);
+        assert(result.command == COMPANION_SERIAL_CMD_INVALID);
+        assert(result.goal == 0);
+    }
+
+    /* Unknown lines are ignored. */
+    static const char *unknown[] = {"hello", "", "   ", "goalkeeper", "goalf 6"};
+    for (size_t i = 0; i < sizeof(unknown) / sizeof(unknown[0]); i++) {
+        companion_serial_parse(unknown[i], &result);
+        assert(result.command == COMPANION_SERIAL_CMD_UNKNOWN);
+    }
+}
+
 int main(void)
 {
     test_timer_cycle();
@@ -394,6 +442,7 @@ int main(void)
     test_day_boundary_gap();
     test_hud_anchors_unchanged();
     test_manual_focus_override_boundary();
+    test_serial_commands();
     puts("companion timer tests passed");
     return 0;
 }

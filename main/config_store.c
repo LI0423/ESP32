@@ -278,6 +278,17 @@ esp_err_t companion_config_set_brightness(uint8_t brightness)
     return companion_config_set(&next);
 }
 
+esp_err_t companion_config_set_daily_goal(uint8_t daily_goal)
+{
+    if (daily_goal < COMPANION_DAILY_GOAL_MIN || daily_goal > COMPANION_DAILY_GOAL_MAX)
+        return ESP_ERR_INVALID_ARG;
+    companion_config_t next;
+    esp_err_t err = companion_config_get(&next);
+    if (err != ESP_OK) return err;
+    next.daily_goal = daily_goal;
+    return companion_config_set(&next);
+}
+
 bool companion_config_has_wifi(void)
 {
     companion_config_t config;

@@ -12,6 +12,7 @@ idf_component_register(
         "companion_model.c"
         "companion_progress.c"
         "companion_schedule.c"
+        "companion_serial.c"
         "companion_timer.c"
         "companion_ui.c"
         "config_store.c"

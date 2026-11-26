@@ -1,10 +1,20 @@
 # Desktop Companion 验证记录
 
-验证日期：2026-11-25
+验证日期：2026-11-25（产品规则更新后部分项待本轮命令实测补齐）
 
-## 代码审查修复
+## 产品规则（本轮实现）
 
-本轮已修复：
+- 工作时段：CST-8 本地 08:00–22:00；之外自动待命并临时降亮
+- 取消 7 天墙钟快进；改为约 30 分钟 stale-save gap 恢复（见 README；明确不是“用户离开检测”）
+- 时间无效：不按墙钟乱切待命/乱降亮
+- 离线 UI：阶段表情与文案保持；仅右上角指示点反映网络
+- HTTPS 设置页：`POST /api/timer/focus`、`POST /api/timer/standby`（Bearer 令牌）
+- 庆祝默认约 8 秒；屏幕显示今日完成轮次（本地 00:00 清零）
+- 夜间「开始新一轮」使用 `work_hours_override`，避免立刻被时钟打回待命；「今晚先待命」挂到下一个 08:00（跨午夜不解除）
+
+## 代码审查修复（既有）
+
+本轮之前已修复：
 
 - HTTP JSON 解析释放后使用（UAF）
 - 管理接口无认证
@@ -29,37 +39,38 @@ Secure Boot V2 与 Flash Encryption 属于不可逆 eFuse 操作，未自动启�
 
 ## 构建
 
-- ESP-IDF v5.5.4 / ESP32-S3
+- ESP-IDF v5.5.4 / ESP32-S3（以本机 `export.sh` 为准）
 - 应用：`build/desktop_companion.bin`
-- 大小：`0x103440`，约 **1.063MB**
-- OTA 单槽 1.5MB，剩余约 **32%**
+- 既有记录大小约 **1.063MB** / OTA 槽剩余约 **32%**（本轮是否重新构建见文末实测栏）
 - 编译优化：`-Os`
 
 ## 主机测试
 
-`bash tools/run_tests.sh`：通过。
+命令：
 
-覆盖专注、庆祝、休息、跨阶段余量传递和异常恢复。
+```bash
+bash tools/run_tests.sh
+```
+
+覆盖：
+
+- 专注 / 庆祝 / 休息与跨阶段余量
+- 工作时段边界 08:00 / 22:00
+- 跨午夜手动待命与下一工作时段解除
+- 短间隔（&lt;30min）与长间隔（≥30min）恢复，含工作/非工作时段、不虚增轮次
+- 无效 / 未同步时间
+- 今日日界 day key
+- 离线阶段文案（不再使用 `Waiting for Wi-Fi`）
+
+实测结果：见文末「本轮命令实测」。
 
 ## HTTPS 认证与 JSON 回归
 
-`tools/http_smoke_test.py`：通过（TLS 迁移前的同一认证/解析逻辑）。
-
-```text
-HTTP auth and JSON parser smoke test passed
-```
-
-验证内容：
-
-- 无令牌修改配置返回 401
-- 无令牌重启返回 401
-- 合法字符串 JSON 配置返回 200
-- 非法亮度返回 400
-- 非法 OTA URL 返回 400
-
-HTTPS 服务已在板端成功启动并监听 443，管理页面和 API 已切换到 HTTPS。当前 Mac 已切换到其他 WiFi，`AI_pe` 信号较弱，板端暂时无法取得 STA IP，因此 HTTPS 实际客户端握手待 `AI_pe` 恢复后确认；配网 AP 仍可用于本地访问。
+`tools/http_smoke_test.py`：需设备在线与管理令牌；逻辑仍覆盖认证与非法亮度/OTA URL。本轮未要求板端联调则不伪造通过结果。
 
 ## WiFi / mDNS / NTP
+
+既有验证摘要：
 
 ```text
 SSID=AI_pe
@@ -73,46 +84,19 @@ WiFi 使用 AP+STA，STA 连接失败时仍保留 `DeskPal-Setup` 配网 AP。AP
 
 ## 计时恢复
 
-设备多次重启后，NVS 计时记录按版本和范围校验恢复。串口日志实测：
-
-```text
-timer started: phase=focus remaining=1358
-```
-
-重启前剩余时间没有重置为完整 1500 秒。
+旧行为（7 天快进累加轮次）已移除。新策略见 README「重启恢复策略」。板端实测需在烧录本轮固件后观察串口 `boot policy action=...` 日志（本轮任务禁止 flash，故不伪造板端结果）。
 
 ## OTA
 
-开发验证时临时启用 HTTP OTA：
-
-```text
-OTA before: running_partition=ota_0; expected_after=ota_1
-OTA state=downloading written=0 total=1055008 running=ota_0
-OTA state=validating written=1055008 total=1055008 running=ota_0
-OTA state=ready written=1055008 total=1055008 running=ota_0
-OTA state=idle written=0 total=0 running=ota_1
-LAN OTA passed and healthy: ota_0 -> ota_1
-```
-
-验证后已恢复生产配置：
+既有开发验证曾临时启用 HTTP OTA 并通过；生产配置保持：
 
 ```text
 # CONFIG_COMPANION_OTA_ALLOW_HTTP is not set
 ```
 
-生产固件默认只接受 HTTPS OTA。
-
 ## 看门狗与稳定性
 
-串口持续观察未发现：
-
-```text
-task_wdt
-panic
-stack overflow
-```
-
-UI 与 service 任务均订阅并主动喂养 Task Watchdog。
+既有观察未发现 `task_wdt` / `panic` / `stack overflow`。UI 与 service 任务均订阅并主动喂养 Task Watchdog。
 
 ## 管理令牌
 
@@ -124,5 +108,26 @@ UI 与 service 任务均订阅并主动喂养 Task Watchdog。
 ## 待确认
 
 - 陪伴角色最终视觉风格
-- 屏幕实际观感、亮度和动画速度
+- 屏幕实际观感、亮度和庆祝动画
 - 生产环境启用 Secure Boot / Flash Encryption
+- 板端工作时段 / 手动待命 / 恢复策略的实机体验（需烧录，本轮不做）
+
+## 本轮命令实测
+
+本轮 Cursor CLI Agent 会话内所有 `Shell` 调用均被环境拒绝（返回 `Rejected:`，无 stdout）。因此：
+
+- `bash tools/run_tests.sh`：**未能在本会话执行**（请在本机项目根目录手动运行核对）
+- `idf.py build`：**未能在本会话执行**
+- `git status` / `git diff --stat`：**未能在本会话执行**
+
+ESP-IDF `export.sh` 路径 `/Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh` 可通过文件系统读取确认存在，但不代替实际构建结果。
+
+请在本机执行：
+
+```bash
+cd /Users/litengjiang/Desktop/MyCode/ESP32/DesktopCompanion
+bash tools/run_tests.sh
+source /Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh && idf.py build
+git status
+git diff --stat
+```

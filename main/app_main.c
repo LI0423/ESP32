@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "companion_model.h"
+#include "companion_schedule.h"
 #include "companion_timer.h"
 #include "companion_ui.h"
 #include "config_store.h"
@@ -31,17 +32,18 @@ static void publish_status(void)
 {
     companion_state_t state;
     companion_model_snapshot(&state);
-    char line[256];
+    char line[320];
     int length = snprintf(line, sizeof(line),
         "{\"v\":1,\"type\":\"status\",\"phase\":\"%s\",\"remaining\":%lu,"
         "\"total\":%lu,\"completed\":%lu,\"online\":%s,\"time_valid\":%s,"
-        "\"clock\":\"%s\",\"date\":\"%s\"}\n",
+        "\"standby\":%s,\"clock\":\"%s\",\"date\":\"%s\"}\n",
         companion_phase_name(state.phase),
         (unsigned long)state.remaining_seconds,
         (unsigned long)state.total_seconds,
         (unsigned long)state.completed_sessions,
         state.online ? "true" : "false",
         state.time_valid ? "true" : "false",
+        state.standby ? "true" : "false",
         state.clock, state.date);
     if (length <= 0 || (size_t)length >= sizeof(line)) return;
     xSemaphoreTake(s_output_lock, portMAX_DELAY);
@@ -52,16 +54,21 @@ static void publish_status(void)
 
 static void save_current_timer(void)
 {
+    companion_persist_snapshot_t snap;
+    companion_model_persist_snapshot(&snap);
     companion_state_t state;
     companion_model_snapshot(&state);
     companion_timer_record_t record = {
-        .phase = (uint8_t)state.phase,
-        .remaining_seconds = state.remaining_seconds,
-        .completed_sessions = state.completed_sessions,
+        .phase = (uint8_t)snap.phase,
+        .remaining_seconds = snap.remaining_seconds,
+        .completed_sessions = snap.completed_sessions,
         .focus_seconds = CONFIG_COMPANION_FOCUS_SECONDS,
         .break_seconds = CONFIG_COMPANION_BREAK_SECONDS,
         .celebrate_seconds = CONFIG_COMPANION_CELEBRATE_SECONDS,
         .saved_epoch = state.time_valid ? (int64_t)time(NULL) : 0,
+        .standby_until_epoch = snap.standby_until_epoch,
+        .day_key = snap.day_key,
+        .work_hours_override = snap.work_hours_override,
     };
     esp_err_t err = companion_store_save_timer(&record);
     if (err == ESP_OK) s_timer_dirty = false;
@@ -71,20 +78,24 @@ static void save_current_timer(void)
     }
 }
 
+/*
+ * Boot restore uses the stale-save-gap policy in companion_schedule.h.
+ * We never fast-forward up to 7 days of wall clock or invent completed sessions.
+ */
 static void restore_from_epoch(void)
 {
     if (!s_restore_pending || !companion_network_time_valid()) return;
     s_restore_pending = false;
     time_t now = time(NULL);
-    if (s_boot_record.saved_epoch > 1700000000 && now >= s_boot_record.saved_epoch) {
-        uint64_t elapsed = (uint64_t)(now - s_boot_record.saved_epoch);
-        if (elapsed > 7u * 24u * 60u * 60u) elapsed = 7u * 24u * 60u * 60u;
-        companion_timer_advance(&s_boot_timer, (uint32_t)elapsed);
-        companion_model_restore(&s_boot_timer);
-        ESP_LOGI(TAG, "timer restored with %llu elapsed seconds",
-                 (unsigned long long)elapsed);
-    }
+    companion_model_apply_boot_policy(true, (int64_t)now, s_boot_record.saved_epoch);
     s_timer_dirty = true;
+}
+
+static void apply_brightness_if_needed(void)
+{
+    uint8_t percent = 0;
+    if (!companion_model_brightness_changed(&percent)) return;
+    lcd_set_brightness(percent);
 }
 
 static void service_task(void *arg)
@@ -103,6 +114,8 @@ static void service_task(void *arg)
         bool time_valid = companion_network_time_valid();
         companion_model_set_network(online);
         companion_model_set_time(time_valid);
+        /* Apply boot policy before ticking so schedule rules do not race restore. */
+        restore_from_epoch();
 
         int64_t now_us = esp_timer_get_time();
         int64_t delta_us = now_us - last_us;
@@ -114,7 +127,8 @@ static void service_task(void *arg)
                 if (companion_model_tick(1)) save_current_timer();
             }
         }
-        restore_from_epoch();
+        if (companion_model_persist_requested()) save_current_timer();
+        apply_brightness_if_needed();
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         if (s_timer_dirty && (uint32_t)(now_ms - last_save_attempt) >= 5000u) {
             save_current_timer();
@@ -158,15 +172,17 @@ void app_main(void)
     esp_err_t err = companion_config_init();
     if (err != ESP_OK) ESP_LOGW(TAG, "config unavailable: %s", esp_err_to_name(err));
     companion_config_t config;
+    uint8_t brightness = 75;
     if (companion_config_get(&config) == ESP_OK) {
+        brightness = config.brightness;
         lcd_init();
-        lcd_set_brightness(config.brightness);
+        lcd_set_brightness(brightness);
     } else {
         lcd_init();
     }
- 
+
     companion_timer_reset(&s_boot_timer);
-    s_boot_record.saved_epoch = 0;
+    memset(&s_boot_record, 0, sizeof(s_boot_record));
     err = companion_store_load_timer(&s_boot_record);
     if (err == ESP_OK && s_boot_record.valid &&
         s_boot_record.focus_seconds == s_boot_timer.focus_seconds &&
@@ -176,9 +192,15 @@ void app_main(void)
                                 s_boot_record.remaining_seconds, s_boot_record.completed_sessions);
     } else {
         s_boot_record.saved_epoch = 0;
+        s_boot_record.standby_until_epoch = 0;
+        s_boot_record.day_key = 0;
+        s_boot_record.work_hours_override = false;
     }
     s_restore_pending = true;
     companion_model_init(&s_boot_timer);
+    companion_model_set_configured_brightness(brightness);
+    companion_model_load_schedule(s_boot_record.day_key, s_boot_record.standby_until_epoch,
+                                  s_boot_record.work_hours_override);
     companion_ui_init();
     pad_ota_init();
 

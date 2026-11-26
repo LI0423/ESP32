@@ -12,7 +12,7 @@ menu "Desktop Companion"
 
     config COMPANION_CELEBRATE_SECONDS
         int "Celebration duration in seconds"
-        default 3
+        default 8
         range 1 30
 
     config COMPANION_TIMEZONE

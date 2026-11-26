@@ -1,0 +1,55 @@
+{
+  "canvas": [
+    240,
+    240
+  ],
+  "character": {
+    "w": 128,
+    "h": 128,
+    "x": 56,
+    "y": 43,
+    "format": "indexed PNG, 128x128, shared <=32 colors including transparent, no dithering, no antialiasing"
+  },
+  "stage_label": {
+    "text": "FOCUS | BREAK | COMPLETE | STANDBY",
+    "font": "Press Start 2P",
+    "size_px": 8,
+    "align": "center",
+    "cx": 120,
+    "cy": 20
+  },
+  "time": {
+    "text": "MM:SS",
+    "font": "Press Start 2P",
+    "size_px": 16,
+    "align": "center",
+    "cx": 120,
+    "cy": 198
+  },
+  "today": {
+    "text": "Today N",
+    "font": "Press Start 2P",
+    "size_px": 8,
+    "align": "center",
+    "cx": 120,
+    "cy": 219
+  },
+  "online_dot": {
+    "cx": 222,
+    "cy": 18,
+    "r": 5,
+    "color_online": "#2ED66C"
+  },
+  "background": {
+    "FOCUS": "#492A15",
+    "BREAK": "#437059",
+    "COMPLETE": "#E3A22C",
+    "STANDBY": "#0F1629"
+  },
+  "notes": [
+    "HUD (label, time, today, online dot) is NOT in the sprite; firmware draws it.",
+    "STANDBY dimming should be backlight / global brightness, not baked into the sprite.",
+    "COMPLETE sparkles are in the character layer.",
+    "Four sprites share one palette."
+  ]
+}

@@ -12,6 +12,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "companion_model.h"
 #include "lcd.h"
 #include "mdns.h"
 #include "provisioning.h"
@@ -343,7 +344,10 @@ esp_err_t companion_network_apply_config(const companion_config_t *config)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_config = *config;
     xSemaphoreGive(s_lock);
-    if (brightness_changed) apply_brightness(config->brightness);
+    if (brightness_changed) {
+        companion_model_set_configured_brightness(config->brightness);
+        /* Effective level (incl. standby dim) is applied by the service task. */
+    }
     if (wifi_changed) {
         err = restart_wifi(config);
         xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -365,7 +369,7 @@ esp_err_t companion_network_set_brightness(uint8_t brightness)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_config = next;
     xSemaphoreGive(s_lock);
-    apply_brightness(brightness);
+    companion_model_set_configured_brightness(brightness);
     return ESP_OK;
 }
 

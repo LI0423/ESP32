@@ -328,7 +328,8 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
             err = ESP_OK;
         }
         if (err == ESP_OK) {
-            err = nvs_get_i64(nvs, "tm_standby_until", &standby_until);
+            /* NVS keys are limited to 15 chars; "tm_standby_til" is 14. */
+            err = nvs_get_i64(nvs, "tm_standby_til", &standby_until);
             if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_TYPE_MISMATCH ||
                 err == ESP_ERR_INVALID_SIZE) {
                 standby_until = 0;
@@ -396,7 +397,8 @@ esp_err_t companion_store_save_timer(const companion_timer_record_t *record)
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_break", (int32_t)record->break_seconds);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_celebrate", (int32_t)record->celebrate_seconds);
     if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_saved_epoch", record->saved_epoch);
-    if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_standby_until", record->standby_until_epoch);
+    /* NVS keys are limited to 15 chars; "tm_standby_til" is 14. */
+    if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_standby_til", record->standby_until_epoch);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_day_key", record->day_key);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_override", record->work_hours_override ? 1 : 0);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_streak", (int32_t)record->streak);

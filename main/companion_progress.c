@@ -57,10 +57,21 @@ void companion_progress_roll_day(companion_progress_t *progress, int32_t today, 
         return;
     }
     /*
-     * No saved day, or the clock moved backward: start this calendar day
-     * without calling it a miss and without adding a point.
+     * First wall-clock sync (no saved day): adopt today and keep any rounds
+     * already finished. Do not treat this as a day change, and do not invent
+     * a miss. If midnight passed while the clock was invalid, those rounds
+     * belong to the local day after sync.
      */
-    if (progress->day_key == 0 || gap_days < 1) {
+    if (progress->day_key == 0) {
+        progress->day_key = today;
+        companion_progress_sync(progress, progress->completed);
+        return;
+    }
+    /*
+     * Clock moved backward: start this calendar day without calling it a miss
+     * and without adding a point.
+     */
+    if (gap_days < 1) {
         progress->completed = 0;
         progress->goal_met_today = false;
         progress->day_key = today;

@@ -314,12 +314,29 @@ static void test_day_boundary_gap(void)
     assert(companion_day_key_gap(20261126, 20261125) == -1);
     assert(companion_day_key_gap(20261131, 20261201) == -1);
 
-    /* First wall-clock sync adopts the day and clears the count, without a miss. */
+    /* First wall-clock sync adopts the day and keeps today's rounds, without a miss. */
     companion_progress_t progress = progress_with(2, 4, 0, 0, false);
     companion_progress_roll_day(&progress, 20261125, 0);
     assert(progress.day_key == 20261125);
-    assert(progress.completed == 0);
+    assert(progress.completed == 2);
     assert(progress.streak == 0);
+    assert(!progress.goal_met_today);
+
+    /* Rounds finished before the first sync stay on the local day after sync. */
+    progress = progress_with(3, 4, 0, 0, false);
+    companion_progress_roll_day(&progress, 20261126, 0);
+    assert(progress.day_key == 20261126);
+    assert(progress.completed == 3);
+    assert(progress.streak == 0);
+    assert(!progress.goal_met_today);
+
+    /* If the goal was already reached, first sync counts that day once. */
+    progress = progress_with(4, 4, 0, 0, false);
+    companion_progress_roll_day(&progress, 20261126, 0);
+    assert(progress.day_key == 20261126);
+    assert(progress.completed == 4);
+    assert(progress.streak == 1);
+    assert(progress.goal_met_today);
 
     /* Same local day only refreshes the count; it does not clear a live streak. */
     progress = progress_with(3, 4, 5, 20261125, false);

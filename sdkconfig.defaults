@@ -1,1 +1,31 @@
+# Applied when sdkconfig is absent (it is gitignored).
+# Chip: ESP32-S3. The GOOUU ESP32-S3-CAM used for validation is an
+# ESP32-S3-WROOM-1-N16R8: 16 MB quad SPI flash and 8 MB octal PSRAM.
+# Flash SPI mode stays at the IDF default (DIO), which boots on that quad flash.
+# Secure Boot and Flash Encryption are left at their defaults (disabled).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# partitions.csv ends at 0x920000, which does not fit in the 2 MB default
+# flash, and the app needs the 1.5 MB OTA slots in that CSV. The default
+# "single factory app" table is only 1 MB and has no OTA slots.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# main/lcd.c allocates the framebuffer with MALLOC_CAP_SPIRAM and asserts.
+# SPIRAM mode defaults to quad, which does not match this module's octal PSRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Match the -Os build recorded in docs/VALIDATION.md. The IDF default is -Og.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# network.c configures a second SNTP server only when this is at least 2.
+# The Kconfig default is 1.
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
+# provisioning.c calls httpd_ssl_start(). This option has no Kconfig default;
+# the HTTPS server example sets it explicitly.
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y

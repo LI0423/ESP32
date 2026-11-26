@@ -19,13 +19,37 @@ ESP32-S3 桌面陪伴番茄钟：240×240 单屏角色、自动 25/5 循环、Wi
 
 ## 构建与烧录
 
+使用 ESP-IDF v5.5.4。先导出本机的 IDF 环境（`IDF_PATH` 指向该版本）：
+
 ```bash
-source /Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh
-idf.py build
-idf.py flash -p /dev/cu.usbmodem1401
+. "$IDF_PATH/export.sh"
 ```
 
-应用：`build/desktop_companion.bin`，约 1.063MB；1.5MB OTA 槽剩余约 32%。
+`main/admin_cert.h` 内嵌管理 HTTPS 的证书和私钥，已在 `.gitignore` 中，干净检出里没有这个文件。构建前在本机生成，不要把该头文件或私钥提交到 git：
+
+```bash
+bash tools/gen_admin_cert.sh
+```
+
+脚本用 OpenSSL 生成一张 CN 为 `deskpal.local` 的自签名证书（SAN 包含 `deskpal.local` 和配网地址 `192.168.4.1`），并写入 `main/admin_cert.h`。再次运行会替换本机证书。
+
+```bash
+idf.py set-target esp32s3
+idf.py build
+```
+
+`sdkconfig` 同样被忽略。没有私有 `sdkconfig` 时，`sdkconfig.defaults` 会指定 ESP32-S3、16MB Flash、自定义 `partitions.csv`、八线 PSRAM，以及 `-Os`。Secure Boot 和 Flash Encryption 保持关闭。
+
+烧录串口用环境变量 `ESPPORT`（`idf.py` 会读取它）。不设置时，只有一个串口的话 `idf.py` 会自动选择。
+
+```bash
+# 按本机修改。Linux 常见 /dev/ttyACM0，macOS 常见 /dev/cu.usbmodem*
+export ESPPORT=/dev/ttyACM0
+idf.py flash
+idf.py monitor
+```
+
+应用输出为 `build/desktop_companion.bin`。ESP-IDF v5.5.4 按上面的默认配置干净构建约 1.07MB，1.5MB OTA 槽剩余约 32%。
 
 ## 测试
 
@@ -51,7 +75,7 @@ https://192.168.4.1
 首次启动会生成随机管理令牌并输出到串口日志：
 
 ```bash
-idf.py -p /dev/cu.usbmodem1401 monitor
+idf.py monitor
 ```
 
 查找 `Admin token`，在网页的“管理令牌”输入框中填写。令牌只保存在板端 NVS，网页不会返回它。
@@ -72,7 +96,7 @@ https://deskpal.local/
 
 ```bash
 DESKPAL_ADMIN_TOKEN=<token> python tools/lan_ota_test.py \
-  --device-ip 192.168.10.218 --allow-http
+  --device-ip <board-ip> --allow-http
 ```
 
 OTA 支持取消、总超时和无进展超时。Secure Boot V2 与 Flash Encryption 属于不可逆 eFuse 配置，当前未自动启用；生产部署前应单独规划签名密钥并开启。

@@ -1,3 +1,11 @@
+# COMPONENT_DIR, not CMAKE_CURRENT_SOURCE_DIR: IDF include()s this file while
+# collecting requirements, and the latter is not the component directory then.
+if(NOT EXISTS "${COMPONENT_DIR}/admin_cert.h")
+    message(FATAL_ERROR
+        "main/admin_cert.h is missing. It is gitignored because it embeds the "
+        "admin private key. From the project root run: bash tools/gen_admin_cert.sh")
+endif()
+
 idf_component_register(
     SRCS
         "app_main.c"

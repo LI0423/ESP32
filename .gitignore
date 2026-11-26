@@ -10,6 +10,7 @@
 
 # Credentials and local TLS material.
 # main/admin_cert.h embeds the administration private key.
+# Create it locally with: bash tools/gen_admin_cert.sh
 /main/admin_cert.h
 *.pem
 *.key

@@ -34,8 +34,11 @@ void companion_progress_sync(companion_progress_t *progress, uint32_t completed)
 /*
  * Move onto `today` (YYYYMMDD).
  * Same day: sync only.
- * day_key == 0, or gap_days < 1 (clock stepped backward): clear today's count
- * and adopt `today` without judging the streak.
+ * day_key == 0 (first sync): adopt `today` and keep `completed`, without
+ * treating this as a missed day. Then sync so a goal already reached counts
+ * once.
+ * gap_days < 1 (clock stepped backward): clear today's count and adopt
+ * `today` without judging the streak.
  * gap_days == 1: if this day was not yet counted, increment when the goal was
  * met and reset the streak to 0 when it was not.
  * gap_days > 1: at least one full day was missed, so the streak becomes 0.

@@ -80,4 +80,9 @@ void lcd_draw_text_sm(int x, int y, const char *str, uint16_t color);
 void lcd_draw_text_sm_len(int x, int y, const char *str, int len, uint16_t color);
 void lcd_draw_text_sm_wrap(int x, int y, int max_w, int max_lines, int line_h,
                             const char *str, uint16_t color);
+/* Blit 8-bit indexed pixels; palette entries are RGB565. Index transparent_index is skipped. */
+void lcd_blit_indexed(int dst_x, int dst_y, int w, int h,
+                      const uint8_t *indices,
+                      const uint16_t *palette, int palette_len,
+                      uint8_t transparent_index);
 void lcd_flush(void);

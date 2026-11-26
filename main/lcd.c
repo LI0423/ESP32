@@ -493,6 +493,27 @@ void lcd_draw_text_sm(int x, int y, const char *str, uint16_t color)
     lcd_draw_text_sm_len(x, y, str, 0x7fffffff, color);
 }
 
+void lcd_blit_indexed(int dst_x, int dst_y, int w, int h,
+                      const uint8_t *indices,
+                      const uint16_t *palette, int palette_len,
+                      uint8_t transparent_index)
+{
+    if (!s_fb || !indices || !palette || w <= 0 || h <= 0 || palette_len <= 0) return;
+    for (int row = 0; row < h; row++) {
+        int y = dst_y + row;
+        if (y < 0 || y >= LCD_HEIGHT) continue;
+        const uint8_t *src = indices + (size_t)row * (size_t)w;
+        uint16_t *dst_row = s_fb + y * LCD_WIDTH;
+        for (int col = 0; col < w; col++) {
+            int x = dst_x + col;
+            if (x < 0 || x >= LCD_WIDTH) continue;
+            uint8_t idx = src[col];
+            if (idx == transparent_index || (int)idx >= palette_len) continue;
+            dst_row[x] = palette[idx];
+        }
+    }
+}
+
 /* 自动按词换行渲染 8x16 文本，超出 max_lines 时末尾加省略号 */
 void lcd_draw_text_sm_wrap(int x, int y, int max_w, int max_lines, int line_h,
                            const char *str, uint16_t color)

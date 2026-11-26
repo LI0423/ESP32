@@ -296,15 +296,26 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
         if (err == ESP_OK) err = read_i32(nvs, "tm_celebrate", &celebrate, -1);
     }
     int64_t saved_epoch = 0;
+    int64_t standby_until = 0;
+    int day_key = 0;
+    int override = 0;
     if (err == ESP_OK && version == 1) {
         err = nvs_get_i64(nvs, "tm_saved_epoch", &saved_epoch);
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            saved_epoch = 0;
-            err = ESP_OK;
-        } else if (err == ESP_ERR_NVS_TYPE_MISMATCH || err == ESP_ERR_INVALID_SIZE) {
+        if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_TYPE_MISMATCH ||
+            err == ESP_ERR_INVALID_SIZE) {
             saved_epoch = 0;
             err = ESP_OK;
         }
+        if (err == ESP_OK) {
+            err = nvs_get_i64(nvs, "tm_standby_until", &standby_until);
+            if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_TYPE_MISMATCH ||
+                err == ESP_ERR_INVALID_SIZE) {
+                standby_until = 0;
+                err = ESP_OK;
+            }
+        }
+        if (err == ESP_OK) err = read_i32(nvs, "tm_day_key", &day_key, 0);
+        if (err == ESP_OK) err = read_i32(nvs, "tm_override", &override, 0);
     }
     nvs_close(nvs);
     if (err != ESP_OK) return err;
@@ -313,12 +324,17 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     if (phase == 0) phase_total = (uint32_t)focus;
     else if (phase == 1) phase_total = (uint32_t)celebrate;
     else if (phase == 2) phase_total = (uint32_t)break_seconds;
-    bool valid = version == 1 && phase >= 0 && phase <= 2 &&
-                 remaining > 0 && (uint32_t)remaining <= phase_total &&
+    else if (phase == 3) phase_total = 0;
+    bool remaining_ok = phase == 3
+                            ? remaining == 0
+                            : (remaining > 0 && (uint32_t)remaining <= phase_total);
+    bool valid = version == 1 && phase >= 0 && phase <= 3 && remaining_ok &&
                  completed >= 0 && completed <= 1000000 &&
                  focus >= 5 && focus <= 86400 &&
                  break_seconds >= 5 && break_seconds <= 86400 &&
-                 celebrate >= 1 && celebrate <= 3600 && saved_epoch >= 0;
+                 celebrate >= 1 && celebrate <= 3600 && saved_epoch >= 0 &&
+                 standby_until >= 0 && day_key >= 0 &&
+                 (override == 0 || override == 1);
     if (valid) {
         out->valid = true;
         out->phase = (uint8_t)phase;
@@ -328,6 +344,9 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
         out->break_seconds = (uint32_t)break_seconds;
         out->celebrate_seconds = (uint32_t)celebrate;
         out->saved_epoch = saved_epoch;
+        out->standby_until_epoch = standby_until;
+        out->day_key = (int32_t)day_key;
+        out->work_hours_override = override == 1;
     }
     return ESP_OK;
 }
@@ -346,6 +365,9 @@ esp_err_t companion_store_save_timer(const companion_timer_record_t *record)
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_break", (int32_t)record->break_seconds);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_celebrate", (int32_t)record->celebrate_seconds);
     if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_saved_epoch", record->saved_epoch);
+    if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_standby_until", record->standby_until_epoch);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_day_key", record->day_key);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_override", record->work_hours_override ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;

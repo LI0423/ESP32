@@ -2,143 +2,120 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#include "companion_timer.h"
+#include "deskpal_font.h"
+#include "deskpal_sprites.h"
 #include "lcd.h"
 
-#define UI_FRAME_MS 100u
-#define TEXT_W 12
-#define SMALL_W 8
-
-static uint32_t s_tick;
-
-static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
+static uint16_t hud_text_color(void)
 {
-    return lcd_rgb(r, g, b);
+    return lcd_rgb(245, 240, 232);
 }
 
-static void text(int x, int y, const char *value, uint16_t color)
-{
-    lcd_draw_text(x, y, value, color);
-}
-
-static void small(int x, int y, const char *value, uint16_t color)
-{
-    lcd_draw_text_sm(x, y, value, color);
-}
-
-static void centered_text(int cx, int y, const char *value, uint16_t color)
-{
-    text(cx - (int)strlen(value) * TEXT_W / 2, y, value, color);
-}
-
-static void centered_small(int cx, int y, const char *value, uint16_t color)
-{
-    small(cx - (int)strlen(value) * SMALL_W / 2, y, value, color);
-}
-
-static uint16_t phase_color(companion_phase_t phase, bool online)
-{
-    if (!online) return rgb(72, 88, 112);
-    switch (phase) {
-    case COMPANION_PHASE_FOCUS: return rgb(77, 232, 255);
-    case COMPANION_PHASE_BREAK: return rgb(94, 245, 184);
-    case COMPANION_PHASE_CELEBRATE: return rgb(255, 201, 107);
-    default: return rgb(77, 232, 255);
-    }
-}
-
-static const char *phase_label(companion_phase_t phase)
+static uint16_t phase_background(companion_phase_t phase)
 {
     switch (phase) {
-    case COMPANION_PHASE_FOCUS: return "FOCUS";
-    case COMPANION_PHASE_BREAK: return "BREAK";
-    case COMPANION_PHASE_CELEBRATE: return "COMPLETE";
-    default: return "FOCUS";
+    case COMPANION_PHASE_FOCUS: return DESKPAL_BG_FOCUS;
+    case COMPANION_PHASE_BREAK: return DESKPAL_BG_BREAK;
+    case COMPANION_PHASE_CELEBRATE: return DESKPAL_BG_COMPLETE;
+    case COMPANION_PHASE_STANDBY: return DESKPAL_BG_STANDBY;
+    default: return DESKPAL_BG_FOCUS;
     }
 }
 
-static const char *phase_phrase(companion_phase_t phase, bool online)
+static deskpal_sprite_id_t phase_sprite(companion_phase_t phase)
 {
-    if (!online) return "Waiting for Wi-Fi";
     switch (phase) {
-    case COMPANION_PHASE_FOCUS: return "Stay with the moment";
-    case COMPANION_PHASE_BREAK: return "Rest your eyes";
-    case COMPANION_PHASE_CELEBRATE: return "One session complete";
-    default: return "Here with you";
+    case COMPANION_PHASE_FOCUS: return DESKPAL_SPRITE_FOCUS;
+    case COMPANION_PHASE_BREAK: return DESKPAL_SPRITE_BREAK;
+    case COMPANION_PHASE_CELEBRATE: return DESKPAL_SPRITE_COMPLETE;
+    case COMPANION_PHASE_STANDBY: return DESKPAL_SPRITE_STANDBY;
+    default: return DESKPAL_SPRITE_FOCUS;
     }
 }
 
-static void draw_header(const companion_state_t *state)
+static void draw_pixel_char(int x, int y, char ch, int scale, uint16_t color)
 {
-    text(10, 5, state->clock, rgb(232, 244, 255));
-    small(96, 10, state->date, rgb(159, 177, 201));
-    uint16_t dot = state->online ? rgb(94, 245, 184) : rgb(72, 88, 112);
-    lcd_fill_ellipse(222, 14, 4, 4, rgb(24, 37, 61));
-    lcd_fill_ellipse(222, 14, 2, 2, dot);
-    lcd_fill_rect(10, 34, 220, 1, rgb(42, 63, 114));
+    const uint8_t *glyph = deskpal_font_glyph(ch);
+    for (int row = 0; row < DESKPAL_FONT_H; row++) {
+        uint8_t bits = glyph[row];
+        for (int col = 0; col < DESKPAL_FONT_W; col++) {
+            if ((bits & (0x80u >> col)) == 0) continue;
+            int px = x + col * scale;
+            int py = y + row * scale;
+            if (scale == 1) {
+                lcd_set_pixel(px, py, color);
+            } else {
+                lcd_fill_rect(px, py, scale, scale, color);
+            }
+        }
+    }
 }
 
-static void draw_face(companion_phase_t phase, bool online, int cx, int cy, uint16_t accent)
+static void draw_pixel_text(int x, int y, const char *value, int scale, uint16_t color)
 {
-    uint16_t body = online ? rgb(18, 31, 52) : rgb(15, 22, 34);
-    uint16_t face = online ? rgb(232, 244, 255) : rgb(92, 108, 132);
-    lcd_fill_ellipse(cx, cy, 55, 53, body);
-    lcd_draw_arc(cx, cy, 55, -90, 270, accent);
-
-    bool blink = (s_tick / 5u) % 24u < 2u;
-    if (phase == COMPANION_PHASE_BREAK || !online) {
-        lcd_line(cx - 30, cy - 7, cx - 14, cy - 7, face);
-        lcd_line(cx + 14, cy - 7, cx + 30, cy - 7, face);
-    } else if (blink) {
-        lcd_line(cx - 30, cy - 7, cx - 14, cy - 7, face);
-        lcd_line(cx + 14, cy - 7, cx + 30, cy - 7, face);
-    } else {
-        lcd_fill_ellipse(cx - 22, cy - 8, 6, 9, face);
-        lcd_fill_ellipse(cx + 22, cy - 8, 6, 9, face);
+    if (!value) return;
+    int advance = DESKPAL_FONT_W * scale;
+    for (int i = 0; value[i]; i++) {
+        draw_pixel_char(x + i * advance, y, value[i], scale, color);
     }
+}
 
-    if (phase == COMPANION_PHASE_CELEBRATE) {
-        lcd_fill_ellipse(cx, cy + 18, 13, 9, accent);
-        lcd_fill_ellipse(cx, cy + 14, 10, 5, body);
-    } else if (phase == COMPANION_PHASE_BREAK || !online) {
-        lcd_draw_arc(cx, cy + 8, 16, 20, 160, face);
-    } else {
-        lcd_line(cx - 12, cy + 18, cx + 12, cy + 18, face);
-    }
+static void draw_centered_pixel_text(int cx, int cy, const char *value, int scale, uint16_t color)
+{
+    if (!value) return;
+    int w = (int)strlen(value) * DESKPAL_FONT_W * scale;
+    int h = DESKPAL_FONT_H * scale;
+    draw_pixel_text(cx - w / 2, cy - h / 2, value, scale, color);
+}
 
-    lcd_fill_ellipse(cx - 37, cy + 14, 5, 3, rgb(245, 143, 168));
-    lcd_fill_ellipse(cx + 37, cy + 14, 5, 3, rgb(245, 143, 168));
+static void draw_character(companion_phase_t phase)
+{
+    const uint8_t *sprite = deskpal_sprite_data(phase_sprite(phase));
+    if (!sprite) return;
+    lcd_blit_indexed(DESKPAL_CHAR_X, DESKPAL_CHAR_Y,
+                     DESKPAL_CHAR_W, DESKPAL_CHAR_H,
+                     sprite, deskpal_palette, DESKPAL_PALETTE_LEN,
+                     DESKPAL_TRANSPARENT_INDEX);
+}
+
+static void draw_online_dot(bool online)
+{
+    uint16_t color = online ? DESKPAL_DOT_ONLINE : lcd_rgb(72, 88, 112);
+    lcd_fill_ellipse(DESKPAL_DOT_CX, DESKPAL_DOT_CY, DESKPAL_DOT_R, DESKPAL_DOT_R, color);
 }
 
 void companion_ui_init(void)
 {
-    s_tick = 0;
 }
 
 void companion_ui_render(const companion_state_t *state)
 {
     if (!state) return;
-    s_tick++;
-    lcd_clear(rgb(5, 9, 20));
-    draw_header(state);
 
-    uint16_t accent = phase_color(state->phase, state->online);
-    static const int8_t breath[] = {0, 1, 2, 1};
-    int cy = 108 + breath[(s_tick / 3u) % 4u];
+    lcd_clear(phase_background(state->phase));
+    draw_character(state->phase);
 
-    uint32_t total = state->total_seconds ? state->total_seconds : 1;
-    uint32_t done = total > state->remaining_seconds ? total - state->remaining_seconds : 0;
-    int percent = total > 0x7fffffffu ? 0 : (int)(done * 100u / total);
-    lcd_draw_arc(120, cy, 72, -90, 270, rgb(30, 45, 70));
-    if (percent > 0) lcd_draw_arc(120, cy, 72, -90, -90 + percent * 360 / 100, accent);
+    uint16_t text = hud_text_color();
+    draw_centered_pixel_text(DESKPAL_STAGE_CX, DESKPAL_STAGE_CY,
+                             companion_phase_label(state->phase), 1, text);
 
-    draw_face(state->phase, state->online, 120, cy, accent);
+    char clock[16];
+    if (state->phase == COMPANION_PHASE_STANDBY) {
+        snprintf(clock, sizeof(clock), "--:--");
+    } else {
+        snprintf(clock, sizeof(clock), "%02lu:%02lu",
+                 (unsigned long)(state->remaining_seconds / 60u),
+                 (unsigned long)(state->remaining_seconds % 60u));
+    }
+    draw_centered_pixel_text(DESKPAL_TIME_CX, DESKPAL_TIME_CY, clock, 2, text);
 
-    centered_small(120, 184, phase_label(state->phase), accent);
-    char value[16];
-    snprintf(value, sizeof(value), "%02lu:%02lu",
-             (unsigned long)(state->remaining_seconds / 60u),
-             (unsigned long)(state->remaining_seconds % 60u));
-    centered_text(120, 198, value, rgb(236, 244, 255));
-    centered_small(120, 222, phase_phrase(state->phase, state->online), rgb(159, 177, 201));
+    char today[24];
+    snprintf(today, sizeof(today), "Today %lu", (unsigned long)state->completed_sessions);
+    draw_centered_pixel_text(DESKPAL_TODAY_CX, DESKPAL_TODAY_CY, today, 1, text);
+
+    /* Offline only affects the network dot — never the character sprite. */
+    draw_online_dot(state->online);
     lcd_flush();
 }

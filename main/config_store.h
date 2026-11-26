@@ -31,6 +31,9 @@ typedef struct {
     uint32_t break_seconds;
     uint32_t celebrate_seconds;
     int64_t saved_epoch;
+    int64_t standby_until_epoch;
+    int32_t day_key;
+    bool work_hours_override;
 } companion_timer_record_t;
 
 esp_err_t companion_config_init(void);

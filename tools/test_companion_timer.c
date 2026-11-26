@@ -1,14 +1,39 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+#include "companion_schedule.h"
 #include "companion_timer.h"
 
-int main(void)
+static struct tm make_local(int year, int month, int day, int hour, int minute)
+{
+    struct tm local = {0};
+    local.tm_year = year - 1900;
+    local.tm_mon = month - 1;
+    local.tm_mday = day;
+    local.tm_hour = hour;
+    local.tm_min = minute;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;
+    return local;
+}
+
+static int64_t epoch_of(struct tm local)
+{
+    time_t value = mktime(&local);
+    assert(value > 0);
+    return (int64_t)value;
+}
+
+static void test_timer_cycle(void)
 {
     companion_timer_t timer;
     companion_timer_reset(&timer);
     assert(timer.phase == COMPANION_PHASE_FOCUS);
     assert(timer.remaining_seconds == 1500);
+    assert(timer.celebrate_seconds == 8);
 
     companion_timer_advance(&timer, 1499);
     assert(timer.phase == COMPANION_PHASE_FOCUS);
@@ -16,10 +41,10 @@ int main(void)
 
     companion_timer_advance(&timer, 1);
     assert(timer.phase == COMPANION_PHASE_CELEBRATE);
-    assert(timer.remaining_seconds == 3);
+    assert(timer.remaining_seconds == 8);
     assert(timer.completed_sessions == 1);
 
-    companion_timer_advance(&timer, 3);
+    companion_timer_advance(&timer, 8);
     assert(timer.phase == COMPANION_PHASE_BREAK);
     assert(timer.remaining_seconds == 300);
 
@@ -28,7 +53,7 @@ int main(void)
     assert(timer.remaining_seconds == 1500);
 
     companion_timer_reset(&timer);
-    companion_timer_advance(&timer, 1500 + 3 + 300 + 10);
+    companion_timer_advance(&timer, 1500 + 8 + 300 + 10);
     assert(timer.phase == COMPANION_PHASE_FOCUS);
     assert(timer.remaining_seconds == 1490);
     assert(timer.completed_sessions == 1);
@@ -43,6 +68,150 @@ int main(void)
     assert(timer.phase == COMPANION_PHASE_FOCUS);
     assert(timer.remaining_seconds == 1500);
 
+    companion_timer_enter_standby(&timer);
+    assert(timer.phase == COMPANION_PHASE_STANDBY);
+    assert(timer.remaining_seconds == 0);
+    companion_timer_advance(&timer, 100);
+    assert(timer.phase == COMPANION_PHASE_STANDBY);
+    assert(timer.completed_sessions == 0);
+
+    companion_timer_start_focus(&timer);
+    assert(timer.phase == COMPANION_PHASE_FOCUS);
+    assert(timer.remaining_seconds == 1500);
+}
+
+static void test_work_hours_boundaries(void)
+{
+    assert(!companion_is_work_hours_minute(7 * 60 + 59));
+    assert(companion_is_work_hours_minute(8 * 60));
+    assert(companion_is_work_hours_minute(12 * 60));
+    assert(companion_is_work_hours_minute(21 * 60 + 59));
+    assert(!companion_is_work_hours_minute(22 * 60));
+    assert(!companion_is_work_hours_minute(0));
+    assert(!companion_is_work_hours_minute(23 * 60 + 30));
+
+    struct tm morning = make_local(2026, 11, 25, 8, 0);
+    struct tm evening = make_local(2026, 11, 25, 22, 0);
+    assert(companion_local_minute_of_day(&morning) == 8 * 60);
+    assert(companion_local_minute_of_day(&evening) == 22 * 60);
+}
+
+static void test_manual_standby_cross_midnight(void)
+{
+    struct tm evening = make_local(2026, 11, 25, 21, 0);
+    int64_t evening_epoch = epoch_of(evening);
+    int64_t until = companion_next_work_start_epoch(evening_epoch, &evening);
+    time_t until_time = (time_t)until;
+    struct tm until_tm = {0};
+    assert(localtime_r(&until_time, &until_tm));
+    assert(until_tm.tm_hour == 8 && until_tm.tm_min == 0);
+    assert(until_tm.tm_mday == 26);
+
+    /* Still active at 00:30 same night — must not clear at midnight. */
+    struct tm midnightish = make_local(2026, 11, 26, 0, 30);
+    int64_t midnight_epoch = epoch_of(midnightish);
+    assert(companion_manual_standby_active(midnight_epoch, until));
+    assert(!companion_should_auto_resume(true, companion_local_minute_of_day(&midnightish),
+                                         true, false, midnight_epoch, until));
+
+    /* 01:00 trigger also holds until the upcoming 08:00 (same calendar morning). */
+    struct tm late = make_local(2026, 11, 26, 1, 0);
+    int64_t late_epoch = epoch_of(late);
+    int64_t until_late = companion_next_work_start_epoch(late_epoch, &late);
+    time_t until_late_time = (time_t)until_late;
+    struct tm until_late_tm = {0};
+    assert(localtime_r(&until_late_time, &until_late_tm));
+    assert(until_late_tm.tm_mday == 26 && until_late_tm.tm_hour == 8);
+    assert(companion_manual_standby_active(late_epoch, until_late));
+
+    /* Clears at next work start, not earlier. */
+    assert(!companion_manual_standby_active(until, until));
+    assert(companion_should_auto_resume(true, 8 * 60, true, false, until, until));
+}
+
+static void test_boot_restore_gaps(void)
+{
+    int work = 10 * 60;
+    int night = 23 * 60;
+    int64_t now = 1800000000LL;
+    int64_t fresh = now - 10 * 60;
+    int64_t stale = now - 31 * 60;
+
+    assert(companion_boot_restore_action(false, now, fresh, work) ==
+           COMPANION_BOOT_SAFE_NO_CLOCK);
+    assert(companion_boot_restore_action(true, 100, fresh, work) ==
+           COMPANION_BOOT_SAFE_NO_CLOCK);
+
+    assert(companion_boot_restore_action(true, now, fresh, work) == COMPANION_BOOT_KEEP);
+    assert(companion_boot_restore_action(true, now, fresh, night) == COMPANION_BOOT_KEEP);
+
+    uint32_t completed_before = 4;
+    companion_timer_t timer;
+    companion_timer_restore(&timer, COMPANION_PHASE_FOCUS, 900, completed_before);
+    companion_boot_action_t long_work =
+        companion_boot_restore_action(true, now, stale, work);
+    assert(long_work == COMPANION_BOOT_FRESH_FOCUS);
+    companion_timer_start_focus(&timer);
+    assert(timer.phase == COMPANION_PHASE_FOCUS);
+    assert(timer.remaining_seconds == 1500);
+    assert(timer.completed_sessions == completed_before); /* no invented rounds */
+
+    companion_boot_action_t long_night =
+        companion_boot_restore_action(true, now, stale, night);
+    assert(long_night == COMPANION_BOOT_ENTER_STANDBY);
+    companion_timer_enter_standby(&timer);
+    assert(timer.phase == COMPANION_PHASE_STANDBY);
+    assert(timer.completed_sessions == completed_before);
+
+    /* Short gap outside hours → keep phase, then schedule may standby. */
+    assert(companion_should_auto_standby(true, night, false, now, 0));
+    assert(!companion_should_auto_standby(true, work, false, now, 0));
+    assert(!companion_should_auto_standby(false, night, false, now, 0));
+    assert(!companion_should_auto_standby(true, night, true, now, 0)); /* override */
+}
+
+static void test_today_day_key(void)
+{
+    struct tm day_a = make_local(2026, 11, 25, 23, 59);
+    struct tm day_b = make_local(2026, 11, 26, 0, 0);
+    assert(companion_local_day_key(&day_a) == 20261125);
+    assert(companion_local_day_key(&day_b) == 20261126);
+    assert(companion_local_day_key(&day_a) != companion_local_day_key(&day_b));
+}
+
+static void test_offline_ui_copy(void)
+{
+    assert(strcmp(companion_phase_phrase(COMPANION_PHASE_FOCUS), "Waiting for Wi-Fi") != 0);
+    assert(strcmp(companion_phase_phrase(COMPANION_PHASE_BREAK), "Waiting for Wi-Fi") != 0);
+    assert(strcmp(companion_phase_phrase(COMPANION_PHASE_CELEBRATE), "Waiting for Wi-Fi") != 0);
+    assert(strcmp(companion_phase_phrase(COMPANION_PHASE_STANDBY), "Quiet until morning") == 0);
+    assert(strcmp(companion_phase_label(COMPANION_PHASE_FOCUS), "FOCUS") == 0);
+    assert(strcmp(companion_phase_name(COMPANION_PHASE_STANDBY), "standby") == 0);
+    assert(companion_effective_brightness(75, true) == COMPANION_STANDBY_BRIGHTNESS);
+    assert(companion_effective_brightness(75, false) == 75);
+}
+
+static void test_manual_focus_override_boundary(void)
+{
+    int64_t now = 1800000000LL;
+    int night = 23 * 60;
+    /* Night + override → do not snap back to standby. */
+    assert(!companion_should_auto_standby(true, night, true, now, 0));
+    /* Manual standby still wins over override once standby_until is set. */
+    int64_t until = now + 8 * 3600;
+    assert(companion_should_auto_standby(true, night, false, now, until));
+    assert(!companion_should_auto_resume(true, night, true, true, now, until));
+}
+
+int main(void)
+{
+    test_timer_cycle();
+    test_work_hours_boundaries();
+    test_manual_standby_cross_midnight();
+    test_boot_restore_gaps();
+    test_today_day_key();
+    test_offline_ui_copy();
+    test_manual_focus_override_boundary();
     puts("companion timer tests passed");
     return 0;
 }

@@ -63,6 +63,11 @@ static const char HTML_PAGE[] =
 "<input id=\"brightness\" type=\"range\" min=\"5\" max=\"100\" value=\"75\">"
 "<label for=\"ota_url\">固件 URL</label><input id=\"ota_url\" maxlength=\"256\" "
 "placeholder=\"https://192.168.1.20/desktop_companion.bin\" autocomplete=\"off\"></div>"
+"<div class=\"card\"><h2>计时</h2><div class=\"row\">"
+"<button id=\"focus_button\">开始新一轮</button>"
+"<button id=\"standby_button\" class=\"secondary\">今晚先待命</button></div>"
+"<div class=\"sub\">开始新一轮会立即进入全新专注；夜间手动开始会保持活跃直到次日 08:00 或再次待命。"
+"今晚先待命会保持到下一个 08:00（跨午夜不解除）。</div></div>"
 "<div class=\"card\"><h2>操作</h2><div class=\"row\">"
 "<button id=\"save_button\">保存</button>"
 "<button id=\"restart_button\" class=\"secondary\">重启</button>"
@@ -87,6 +92,10 @@ static const char HTML_PAGE[] =
 "clear_wifi_password:$('clear_wifi_password').checked,brightness:Number($('brightness').value),"
 "ota_url:$('ota_url').value,reboot:false})});$('message').textContent='已保存';"
 "$('wifi_password').value='';await loadConfig();await refresh()}catch(e){$('message').textContent=e.message}};"
+"$('focus_button').onclick=async()=>{try{await api('/api/timer/focus',{method:'POST',body:'{}'});"
+"$('message').textContent='已开始新一轮专注';await refresh()}catch(e){$('message').textContent=e.message}};"
+"$('standby_button').onclick=async()=>{try{await api('/api/timer/standby',{method:'POST',body:'{}'});"
+"$('message').textContent='已进入待命，直到下一个 08:00';await refresh()}catch(e){$('message').textContent=e.message}};"
 "$('restart_button').onclick=async()=>{try{await api('/api/restart',{method:'POST',body:'{}'});"
 "$('message').textContent='正在重启…'}catch(e){$('message').textContent=e.message}};"
 "$('ota_button').onclick=async()=>{try{const url=$('ota_url').value.trim();if(!url)throw new Error('请填写固件 URL');"
@@ -370,6 +379,8 @@ static esp_err_t status_get_handler(httpd_req_t *request)
     cJSON_AddNumberToObject(timer, "remaining_seconds", state.remaining_seconds);
     cJSON_AddNumberToObject(timer, "total_seconds", state.total_seconds);
     cJSON_AddNumberToObject(timer, "completed_sessions", state.completed_sessions);
+    cJSON_AddBoolToObject(timer, "standby", state.standby);
+    cJSON_AddBoolToObject(timer, "work_hours_override", state.work_hours_override);
     cJSON_AddStringToObject(ota_json, "state", ota_state_name(ota.state));
     cJSON_AddNumberToObject(ota_json, "state_code", ota.state);
     cJSON_AddNumberToObject(ota_json, "bytes_written", ota.bytes_written);
@@ -474,6 +485,43 @@ static esp_err_t restart_post_handler(httpd_req_t *request)
     return send_json(request, response);
 }
 
+static esp_err_t timer_focus_post_handler(httpd_req_t *request)
+{
+    esp_err_t preflight = reject_oversized_body(request);
+    if (preflight != ESP_OK) return preflight;
+    esp_err_t auth = require_admin(request);
+    if (auth != ESP_OK) return auth;
+    /* Body is optional; accept empty or {}. */
+    if (request->content_len > 0) {
+        cJSON *root = read_json_body(request);
+        if (!root) return ESP_OK;
+        cJSON_Delete(root);
+    }
+    companion_model_start_fresh_focus();
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", true);
+    cJSON_AddStringToObject(response, "phase", "focus");
+    return send_json(request, response);
+}
+
+static esp_err_t timer_standby_post_handler(httpd_req_t *request)
+{
+    esp_err_t preflight = reject_oversized_body(request);
+    if (preflight != ESP_OK) return preflight;
+    esp_err_t auth = require_admin(request);
+    if (auth != ESP_OK) return auth;
+    if (request->content_len > 0) {
+        cJSON *root = read_json_body(request);
+        if (!root) return ESP_OK;
+        cJSON_Delete(root);
+    }
+    companion_model_standby_until_morning();
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", true);
+    cJSON_AddStringToObject(response, "phase", "standby");
+    return send_json(request, response);
+}
+
 void companion_provisioning_start(void)
 {
     if (s_server) return;
@@ -482,7 +530,7 @@ void companion_provisioning_start(void)
     config.httpd.recv_wait_timeout = 2;
     config.httpd.send_wait_timeout = 5;
     config.httpd.max_open_sockets = 1;
-    config.httpd.max_uri_handlers = 9;
+    config.httpd.max_uri_handlers = 11;
     config.servercert = admin_server_cert;
     config.servercert_len = sizeof(admin_server_cert) - 1;
     config.prvtkey_pem = admin_server_key;
@@ -498,6 +546,8 @@ void companion_provisioning_start(void)
     httpd_uri_t ota = {.uri = "/api/ota", .method = HTTP_POST, .handler = ota_post_handler};
     httpd_uri_t ota_cancel = {.uri = "/api/ota/cancel", .method = HTTP_POST, .handler = ota_cancel_handler};
     httpd_uri_t restart = {.uri = "/api/restart", .method = HTTP_POST, .handler = restart_post_handler};
+    httpd_uri_t focus = {.uri = "/api/timer/focus", .method = HTTP_POST, .handler = timer_focus_post_handler};
+    httpd_uri_t standby = {.uri = "/api/timer/standby", .method = HTTP_POST, .handler = timer_standby_post_handler};
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &config_get);
     httpd_register_uri_handler(s_server, &config_post);
@@ -505,5 +555,7 @@ void companion_provisioning_start(void)
     httpd_register_uri_handler(s_server, &ota);
     httpd_register_uri_handler(s_server, &ota_cancel);
     httpd_register_uri_handler(s_server, &restart);
+    httpd_register_uri_handler(s_server, &focus);
+    httpd_register_uri_handler(s_server, &standby);
     ESP_LOGI(TAG, "settings HTTPS server started");
 }

@@ -46,6 +46,14 @@ int companion_local_minute_of_day(const struct tm *local);
 int32_t companion_local_day_key(const struct tm *local);
 
 /*
+ * Whole local calendar days from `from_key` to `to_key` (both YYYYMMDD).
+ * Returns 0 when the keys are the same valid day, a positive count when
+ * `to_key` is later, and -1 when either key is not a real civil date or
+ * `to_key` is earlier.
+ */
+int companion_day_key_gap(int32_t from_key, int32_t to_key);
+
+/*
  * Next local 08:00 epoch.
  * Before 08:00 → today's 08:00; at/after 08:00 → tomorrow's 08:00.
  * Used by "standby tonight" so 21:00 and 01:00 both hold until the next 08:00

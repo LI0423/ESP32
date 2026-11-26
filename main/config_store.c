@@ -1,5 +1,7 @@
 #include "config_store.h"
 
+#include "companion_progress.h"
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +68,8 @@ esp_err_t companion_config_validate(const companion_config_t *config)
         !text_valid(config->admin_token, COMPANION_ADMIN_TOKEN_MAX, true) ||
         !companion_config_url_valid(config->ota_url)) return ESP_ERR_INVALID_ARG;
     if (config->brightness < 5 || config->brightness > 100) return ESP_ERR_INVALID_ARG;
+    if (config->daily_goal < COMPANION_DAILY_GOAL_MIN ||
+        config->daily_goal > COMPANION_DAILY_GOAL_MAX) return ESP_ERR_INVALID_ARG;
     return ESP_OK;
 }
 
@@ -73,6 +77,7 @@ static void config_defaults(companion_config_t *config)
 {
     memset(config, 0, sizeof(*config));
     config->brightness = (uint8_t)clamp_int(CONFIG_PAD_DEFAULT_BRIGHTNESS, 5, 100);
+    config->daily_goal = (uint8_t)COMPANION_DAILY_GOAL_DEFAULT;
 }
 
 static esp_err_t read_string(nvs_handle_t nvs, const char *key, char *out,
@@ -134,6 +139,10 @@ static esp_err_t load_config(companion_config_t *config)
     int brightness = defaults.brightness;
     if (err == ESP_OK) err = read_i32(nvs, "brightness", &brightness, defaults.brightness);
     if (err == ESP_OK) config->brightness = (uint8_t)clamp_int(brightness, 5, 100);
+    int daily_goal = defaults.daily_goal;
+    if (err == ESP_OK) err = read_i32(nvs, "daily_goal", &daily_goal, defaults.daily_goal);
+    if (err == ESP_OK)
+        config->daily_goal = (uint8_t)companion_progress_sanitize_goal((uint32_t)daily_goal);
     nvs_close(nvs);
     if (err != ESP_OK) return err;
 
@@ -163,6 +172,7 @@ static esp_err_t store_config(const companion_config_t *config)
     if (err == ESP_OK) err = write_string(nvs, "ota_url", config->ota_url);
     if (err == ESP_OK) err = write_string(nvs, "admin_token_v2", config->admin_token);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "brightness", config->brightness);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "daily_goal", config->daily_goal);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;
@@ -317,6 +327,14 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
         if (err == ESP_OK) err = read_i32(nvs, "tm_day_key", &day_key, 0);
         if (err == ESP_OK) err = read_i32(nvs, "tm_override", &override, 0);
     }
+    int streak = 0;
+    int goal_met = 0;
+    if (err == ESP_OK && version == 1) {
+        err = read_i32(nvs, "tm_streak", &streak, 0);
+        if (err == ESP_OK) err = read_i32(nvs, "tm_goal_met", &goal_met, 0);
+    }
+    if (streak < 0 || streak > 1000000) streak = 0;
+    if (goal_met != 1) goal_met = 0;
     nvs_close(nvs);
     if (err != ESP_OK) return err;
 
@@ -347,6 +365,8 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
         out->standby_until_epoch = standby_until;
         out->day_key = (int32_t)day_key;
         out->work_hours_override = override == 1;
+        out->streak = (uint32_t)streak;
+        out->goal_met_today = goal_met == 1;
     }
     return ESP_OK;
 }
@@ -368,6 +388,8 @@ esp_err_t companion_store_save_timer(const companion_timer_record_t *record)
     if (err == ESP_OK) err = nvs_set_i64(nvs, "tm_standby_until", record->standby_until_epoch);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_day_key", record->day_key);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_override", record->work_hours_override ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_streak", (int32_t)record->streak);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_goal_met", record->goal_met_today ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;

@@ -8,7 +8,7 @@
     "h": 128,
     "x": 56,
     "y": 43,
-    "format": "indexed PNG, 128x128, shared <=32 colors including transparent, no dithering, no antialiasing"
+    "note": "unchanged; four indexed 128x128 sprites, HUD not in sprite"
   },
   "stage_label": {
     "text": "FOCUS | BREAK | COMPLETE | STANDBY",
@@ -16,7 +16,27 @@
     "size_px": 8,
     "align": "center",
     "cx": 120,
-    "cy": 20
+    "cy": 20,
+    "note": "unchanged"
+  },
+  "streak": {
+    "text": "ND",
+    "example": "5D",
+    "font": "Press Start 2P",
+    "size_px": 8,
+    "align": "left",
+    "x": 10,
+    "cy": 20,
+    "max_text": "999D",
+    "max_width_px": 32,
+    "bbox_reserved": [
+      10,
+      16,
+      42,
+      24
+    ],
+    "color": "#FFECD6",
+    "note": "Consecutive days meeting the daily goal; resets to 0 if the goal is not met that day. ASCII only (Press Start 2P has no CJK)."
   },
   "time": {
     "text": "MM:SS",
@@ -24,21 +44,27 @@
     "size_px": 16,
     "align": "center",
     "cx": 120,
-    "cy": 198
+    "cy": 198,
+    "color": "#FFECD6",
+    "note": "unchanged"
   },
   "today": {
-    "text": "Today N",
+    "text": "Today N/G",
+    "example": "Today 3/4",
     "font": "Press Start 2P",
     "size_px": 8,
     "align": "center",
     "cx": 120,
-    "cy": 219
+    "cy": 219,
+    "color": "#FFECD6",
+    "note": "Replaces Today N. N is completed rounds today; G is today's goal (default 4, changeable on the settings page). N may exceed G."
   },
   "online_dot": {
     "cx": 222,
     "cy": 18,
     "r": 5,
-    "color_online": "#2ED66C"
+    "color_online": "#2ED66C",
+    "note": "unchanged"
   },
   "background": {
     "FOCUS": "#492A15",
@@ -46,10 +72,11 @@
     "COMPLETE": "#E3A22C",
     "STANDBY": "#0F1629"
   },
+  "hud_color": "#FFECD6",
   "notes": [
-    "HUD (label, time, today, online dot) is NOT in the sprite; firmware draws it.",
-    "STANDBY dimming should be backlight / global brightness, not baked into the sprite.",
-    "COMPLETE sparkles are in the character layer.",
-    "Four sprites share one palette."
+    "HUD is drawn by firmware, not baked into character sprites.",
+    "Do not move the character, timer, stage label, or online dot.",
+    "STANDBY dimming remains backlight / global brightness, not baked into the sprite.",
+    "New fields: today goal folded into the existing Today line as Today N/G; streak at top-left as ND (e.g. 5D)."
   ]
 }

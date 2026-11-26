@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "companion_model.h"
+#include "companion_progress.h"
 #include "companion_schedule.h"
 #include "companion_timer.h"
 #include "companion_ui.h"
@@ -32,15 +33,18 @@ static void publish_status(void)
 {
     companion_state_t state;
     companion_model_snapshot(&state);
-    char line[320];
+    char line[384];
     int length = snprintf(line, sizeof(line),
         "{\"v\":1,\"type\":\"status\",\"phase\":\"%s\",\"remaining\":%lu,"
-        "\"total\":%lu,\"completed\":%lu,\"online\":%s,\"time_valid\":%s,"
+        "\"total\":%lu,\"completed\":%lu,\"goal\":%lu,\"streak\":%lu,"
+        "\"online\":%s,\"time_valid\":%s,"
         "\"standby\":%s,\"clock\":\"%s\",\"date\":\"%s\"}\n",
         companion_phase_name(state.phase),
         (unsigned long)state.remaining_seconds,
         (unsigned long)state.total_seconds,
         (unsigned long)state.completed_sessions,
+        (unsigned long)state.daily_goal,
+        (unsigned long)state.streak,
         state.online ? "true" : "false",
         state.time_valid ? "true" : "false",
         state.standby ? "true" : "false",
@@ -69,6 +73,8 @@ static void save_current_timer(void)
         .standby_until_epoch = snap.standby_until_epoch,
         .day_key = snap.day_key,
         .work_hours_override = snap.work_hours_override,
+        .streak = snap.streak,
+        .goal_met_today = snap.goal_met_today,
     };
     esp_err_t err = companion_store_save_timer(&record);
     if (err == ESP_OK) s_timer_dirty = false;
@@ -173,8 +179,10 @@ void app_main(void)
     if (err != ESP_OK) ESP_LOGW(TAG, "config unavailable: %s", esp_err_to_name(err));
     companion_config_t config;
     uint8_t brightness = 75;
+    uint32_t daily_goal = COMPANION_DAILY_GOAL_DEFAULT;
     if (companion_config_get(&config) == ESP_OK) {
         brightness = config.brightness;
+        if (config.daily_goal) daily_goal = config.daily_goal;
         lcd_init();
         lcd_set_brightness(brightness);
     } else {
@@ -201,6 +209,7 @@ void app_main(void)
     companion_model_set_configured_brightness(brightness);
     companion_model_load_schedule(s_boot_record.day_key, s_boot_record.standby_until_epoch,
                                   s_boot_record.work_hours_override);
+    companion_model_load_progress(daily_goal, s_boot_record.streak, s_boot_record.goal_met_today);
     companion_ui_init();
     pad_ota_init();
 

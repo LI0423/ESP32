@@ -1,11 +1,16 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
+#include "companion_progress.h"
 #include "companion_schedule.h"
 #include "companion_timer.h"
+#include "deskpal_font.h"
+#include "deskpal_sprites.h"
 
 static struct tm make_local(int year, int month, int day, int hour, int minute)
 {
@@ -191,6 +196,162 @@ static void test_offline_ui_copy(void)
     assert(companion_effective_brightness(75, false) == 75);
 }
 
+static companion_progress_t progress_with(uint32_t completed, uint32_t goal, uint32_t streak,
+                                          int32_t day_key, bool goal_met_today)
+{
+    companion_progress_t progress;
+    companion_progress_reset(&progress);
+    progress.completed = completed;
+    progress.goal = goal;
+    progress.streak = streak;
+    progress.day_key = day_key;
+    progress.goal_met_today = goal_met_today;
+    return progress;
+}
+
+static void test_goal_default_and_change(void)
+{
+    companion_progress_t progress;
+    companion_progress_reset(&progress);
+    assert(progress.goal == COMPANION_DAILY_GOAL_DEFAULT);
+    assert(progress.goal == 4);
+    assert(progress.streak == 0);
+    assert(!progress.goal_met_today);
+    assert(companion_progress_sanitize_goal(0) == 4);
+    assert(companion_progress_sanitize_goal(100) == 4);
+    assert(companion_progress_sanitize_goal(1) == 1);
+    assert(companion_progress_sanitize_goal(99) == 99);
+
+    companion_progress_set_goal(&progress, 6);
+    assert(progress.goal == 6);
+    assert(progress.streak == 0);
+
+    /* Lowering the goal under today's count counts today once. */
+    progress.completed = 3;
+    progress.streak = 5;
+    companion_progress_set_goal(&progress, 3);
+    assert(progress.goal == 3);
+    assert(progress.streak == 6);
+    assert(progress.goal_met_today);
+
+    /* Raising it back above today's count removes only today's point. */
+    companion_progress_set_goal(&progress, 8);
+    assert(progress.goal == 8);
+    assert(progress.streak == 5);
+    assert(!progress.goal_met_today);
+
+    /* A stored out-of-range value falls back to the default, not a wipe. */
+    companion_progress_set_goal(&progress, 0);
+    assert(progress.goal == 4);
+}
+
+static void test_streak_on_met_and_missed_day(void)
+{
+    /* Mock: 5D with Today 3/4 becomes 6D at Today 4/4, and extra rounds stay 6D. */
+    companion_progress_t progress = progress_with(3, 4, 5, 20261125, false);
+    companion_progress_sync(&progress, 4);
+    assert(progress.streak == 6);
+    assert(progress.goal_met_today);
+    assert(progress.completed == 4);
+    companion_progress_sync(&progress, 5);
+    assert(progress.streak == 6);
+    assert(progress.completed == 5);
+
+    char today[24];
+    char streak[8];
+    companion_progress_format_today(today, sizeof(today), 3, 4);
+    companion_progress_format_streak(streak, sizeof(streak), 5);
+    assert(strcmp(today, "Today 3/4") == 0);
+    assert(strcmp(streak, "5D") == 0);
+    companion_progress_format_today(today, sizeof(today), 5, 4);
+    companion_progress_format_streak(streak, sizeof(streak), 6);
+    assert(strcmp(today, "Today 5/4") == 0);
+    assert(strcmp(streak, "6D") == 0);
+    companion_progress_format_streak(streak, sizeof(streak), 1000);
+    assert(strcmp(streak, "999D") == 0);
+    companion_progress_format_streak(streak, sizeof(streak), 0);
+    assert(strcmp(streak, "0D") == 0);
+
+    /* The day ends short of the goal: the streak clears. */
+    progress = progress_with(3, 4, 5, 20261125, false);
+    companion_progress_roll_day(&progress, 20261126, 1);
+    assert(progress.streak == 0);
+    assert(progress.completed == 0);
+    assert(!progress.goal_met_today);
+    assert(progress.day_key == 20261126);
+
+    /* Met yesterday and already counted: the next morning keeps the streak. */
+    progress = progress_with(4, 4, 6, 20261125, true);
+    companion_progress_roll_day(&progress, 20261126, 1);
+    assert(progress.streak == 6);
+    assert(progress.completed == 0);
+    assert(!progress.goal_met_today);
+
+    /* Met yesterday but the increment was not saved: count it once at the boundary. */
+    progress = progress_with(4, 4, 5, 20261125, false);
+    companion_progress_roll_day(&progress, 20261126, 1);
+    assert(progress.streak == 6);
+    assert(progress.completed == 0);
+    assert(!progress.goal_met_today);
+
+    /* Two calendar days later, the empty day in between breaks the streak. */
+    progress = progress_with(4, 4, 6, 20261125, true);
+    companion_progress_roll_day(&progress, 20261127, 2);
+    assert(progress.streak == 0);
+    assert(progress.day_key == 20261127);
+    assert(progress.completed == 0);
+}
+
+static void test_day_boundary_gap(void)
+{
+    assert(companion_day_key_gap(20261125, 20261125) == 0);
+    assert(companion_day_key_gap(20261125, 20261126) == 1);
+    assert(companion_day_key_gap(20261130, 20261201) == 1);
+    assert(companion_day_key_gap(20261231, 20270101) == 1);
+    assert(companion_day_key_gap(20260228, 20260301) == 1);
+    assert(companion_day_key_gap(20240228, 20240229) == 1);
+    assert(companion_day_key_gap(20240228, 20240301) == 2);
+    assert(companion_day_key_gap(20261126, 20261125) == -1);
+    assert(companion_day_key_gap(20261131, 20261201) == -1);
+
+    /* First wall-clock sync adopts the day and clears the count, without a miss. */
+    companion_progress_t progress = progress_with(2, 4, 0, 0, false);
+    companion_progress_roll_day(&progress, 20261125, 0);
+    assert(progress.day_key == 20261125);
+    assert(progress.completed == 0);
+    assert(progress.streak == 0);
+
+    /* Same local day only refreshes the count; it does not clear a live streak. */
+    progress = progress_with(3, 4, 5, 20261125, false);
+    companion_progress_roll_day(&progress, 20261125, 0);
+    assert(progress.streak == 5);
+    assert(progress.completed == 3);
+    assert(progress.day_key == 20261125);
+
+    /* A backwards step clears today's count and does not invent a miss or a point. */
+    progress = progress_with(4, 4, 6, 20261126, true);
+    companion_progress_roll_day(&progress, 20261125, -1);
+    assert(progress.streak == 6);
+    assert(progress.completed == 0);
+    assert(!progress.goal_met_today);
+    assert(progress.day_key == 20261125);
+}
+
+static void test_hud_anchors_unchanged(void)
+{
+    assert(DESKPAL_CHAR_W == 128 && DESKPAL_CHAR_H == 128);
+    assert(DESKPAL_CHAR_X == 56 && DESKPAL_CHAR_Y == 43);
+    assert(DESKPAL_STAGE_CX == 120 && DESKPAL_STAGE_CY == 20);
+    assert(DESKPAL_TIME_CX == 120 && DESKPAL_TIME_CY == 198);
+    assert(DESKPAL_TODAY_CX == 120 && DESKPAL_TODAY_CY == 219);
+    assert(DESKPAL_DOT_CX == 222 && DESKPAL_DOT_CY == 18 && DESKPAL_DOT_R == 5);
+    assert(DESKPAL_STREAK_X == 10 && DESKPAL_STREAK_CY == 20);
+    /* 8px glyph, cy 20 → top y 16. "999D" is 32px, so the reserved box ends at x 42. */
+    assert(DESKPAL_FONT_W == 8 && DESKPAL_FONT_H == 8);
+    assert(DESKPAL_STREAK_CY - DESKPAL_FONT_H / 2 == 16);
+    assert(DESKPAL_STREAK_X + 4 * DESKPAL_FONT_W == 42);
+}
+
 static void test_manual_focus_override_boundary(void)
 {
     int64_t now = 1800000000LL;
@@ -211,6 +372,10 @@ int main(void)
     test_boot_restore_gaps();
     test_today_day_key();
     test_offline_ui_copy();
+    test_goal_default_and_change();
+    test_streak_on_met_and_missed_day();
+    test_day_boundary_gap();
+    test_hud_anchors_unchanged();
     test_manual_focus_override_boundary();
     puts("companion timer tests passed");
     return 0;

@@ -1,5 +1,6 @@
 /* 8x8 monospaced pixel font for DeskPal HUD (Press Start–like).
- * Covers digits, colon, space, hyphen, A–Z, and lowercase a/d/o/y for "Today". */
+ * Covers digits, colon, slash, space, hyphen, A–Z, and lowercase a/d/o/y
+ * for "Today N/G" and "ND". No CJK glyphs. */
 #pragma once
 
 #include <stdint.h>
@@ -13,6 +14,7 @@ static inline const uint8_t *deskpal_font_glyph(char ch)
     static const uint8_t g_space[8] = {0,0,0,0,0,0,0,0};
     static const uint8_t g_hyphen[8] = {0x00,0x00,0x00,0x7E,0x7E,0x00,0x00,0x00};
     static const uint8_t g_colon[8] = {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00};
+    static const uint8_t g_slash[8] = {0x03,0x06,0x0C,0x18,0x30,0x60,0xC0,0x00};
     static const uint8_t g_0[8] = {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00};
     static const uint8_t g_1[8] = {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00};
     static const uint8_t g_2[8] = {0x3C,0x66,0x06,0x0C,0x18,0x30,0x7E,0x00};
@@ -49,6 +51,7 @@ static inline const uint8_t *deskpal_font_glyph(char ch)
     case ' ': return g_space;
     case '-': return g_hyphen;
     case ':': return g_colon;
+    case '/': return g_slash;
     case '0': return g_0;
     case '1': return g_1;
     case '2': return g_2;

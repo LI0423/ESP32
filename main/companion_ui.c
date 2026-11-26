@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "companion_progress.h"
 #include "companion_timer.h"
 #include "deskpal_font.h"
 #include "deskpal_sprites.h"
@@ -10,7 +11,8 @@
 
 static uint16_t hud_text_color(void)
 {
-    return lcd_rgb(245, 240, 232);
+    /* Approved HUD color #FFECD6. Stage, time, today, and streak share it. */
+    return lcd_rgb(255, 236, 214);
 }
 
 static uint16_t phase_background(companion_phase_t phase)
@@ -98,6 +100,11 @@ void companion_ui_render(const companion_state_t *state)
     draw_character(state->phase);
 
     uint16_t text = hud_text_color();
+    char streak[8];
+    companion_progress_format_streak(streak, sizeof(streak), state->streak);
+    /* Left-aligned on the stage-label row. 8px glyph → top y = cy - 4. */
+    draw_pixel_text(DESKPAL_STREAK_X, DESKPAL_STREAK_CY - DESKPAL_FONT_H / 2,
+                    streak, 1, text);
     draw_centered_pixel_text(DESKPAL_STAGE_CX, DESKPAL_STAGE_CY,
                              companion_phase_label(state->phase), 1, text);
 
@@ -112,7 +119,8 @@ void companion_ui_render(const companion_state_t *state)
     draw_centered_pixel_text(DESKPAL_TIME_CX, DESKPAL_TIME_CY, clock, 2, text);
 
     char today[24];
-    snprintf(today, sizeof(today), "Today %lu", (unsigned long)state->completed_sessions);
+    companion_progress_format_today(today, sizeof(today),
+                                    state->completed_sessions, state->daily_goal);
     draw_centered_pixel_text(DESKPAL_TODAY_CX, DESKPAL_TODAY_CY, today, 1, text);
 
     /* Offline only affects the network dot — never the character sprite. */

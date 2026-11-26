@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "admin_cert.h"
 #include "companion_model.h"
+#include "companion_progress.h"
 #include "config_store.h"
 #include "esp_app_desc.h"
 #include "esp_err.h"
@@ -61,6 +62,8 @@ static const char HTML_PAGE[] =
 "<label class=\"check\"><input id=\"clear_wifi_password\" type=\"checkbox\"> 明确清除密码</label>"
 "<label for=\"brightness\">亮度 <span id=\"brightness_value\">75</span>%</label>"
 "<input id=\"brightness\" type=\"range\" min=\"5\" max=\"100\" value=\"75\">"
+"<label for=\"daily_goal\">今日目标（轮，1–99）</label>"
+"<input id=\"daily_goal\" type=\"number\" min=\"1\" max=\"99\" step=\"1\" value=\"4\">"
 "<label for=\"ota_url\">固件 URL</label><input id=\"ota_url\" maxlength=\"256\" "
 "placeholder=\"https://192.168.1.20/desktop_companion.bin\" autocomplete=\"off\"></div>"
 "<div class=\"card\"><h2>计时</h2><div class=\"row\">"
@@ -81,6 +84,7 @@ static const char HTML_PAGE[] =
 "let data={};try{data=await r.json()}catch(e){}if(!r.ok)throw new Error(data.error||('HTTP '+r.status));return data}"
 "async function loadConfig(){const c=await api('/api/config');$('wifi_ssid').value=c.wifi_ssid||'';"
 "$('brightness').value=c.brightness;$('brightness_value').textContent=c.brightness;"
+"$('daily_goal').value=c.daily_goal||4;"
 "$('ota_url').value=c.ota_url||''}"
 "async function refresh(){try{const s=await api('/api/status');$('preview').textContent=JSON.stringify(s,null,2)}"
 "catch(e){$('preview').textContent=e.message}}"
@@ -90,6 +94,7 @@ static const char HTML_PAGE[] =
 "$('save_button').onclick=async()=>{try{await api('/api/config',{method:'POST',body:JSON.stringify({"
 "wifi_ssid:$('wifi_ssid').value,wifi_password:$('wifi_password').value,"
 "clear_wifi_password:$('clear_wifi_password').checked,brightness:Number($('brightness').value),"
+"daily_goal:Number($('daily_goal').value),"
 "ota_url:$('ota_url').value,reboot:false})});$('message').textContent='已保存';"
 "$('wifi_password').value='';await loadConfig();await refresh()}catch(e){$('message').textContent=e.message}};"
 "$('focus_button').onclick=async()=>{try{await api('/api/timer/focus',{method:'POST',body:'{}'});"
@@ -317,6 +322,7 @@ static esp_err_t config_get_handler(httpd_req_t *request)
     cJSON_AddStringToObject(root, "ota_url", config.ota_url);
     cJSON_AddBoolToObject(root, "admin_token_set", config.admin_token[0] != '\0');
     cJSON_AddNumberToObject(root, "brightness", config.brightness);
+    cJSON_AddNumberToObject(root, "daily_goal", config.daily_goal);
     return send_json(request, root);
 }
 
@@ -379,6 +385,8 @@ static esp_err_t status_get_handler(httpd_req_t *request)
     cJSON_AddNumberToObject(timer, "remaining_seconds", state.remaining_seconds);
     cJSON_AddNumberToObject(timer, "total_seconds", state.total_seconds);
     cJSON_AddNumberToObject(timer, "completed_sessions", state.completed_sessions);
+    cJSON_AddNumberToObject(timer, "daily_goal", state.daily_goal);
+    cJSON_AddNumberToObject(timer, "streak", state.streak);
     cJSON_AddBoolToObject(timer, "standby", state.standby);
     cJSON_AddBoolToObject(timer, "work_hours_override", state.work_hours_override);
     cJSON_AddStringToObject(ota_json, "state", ota_state_name(ota.state));
@@ -407,6 +415,12 @@ static esp_err_t config_post_handler(httpd_req_t *request)
     const cJSON *brightness_item = cJSON_GetObjectItemCaseSensitive(root, "brightness");
     if (brightness_item && !json_int_range(brightness_item, 5, 100, &brightness)) valid = false;
     next.brightness = (uint8_t)brightness;
+    int daily_goal = next.daily_goal;
+    const cJSON *goal_item = cJSON_GetObjectItemCaseSensitive(root, "daily_goal");
+    if (goal_item && !json_int_range(goal_item, (int)COMPANION_DAILY_GOAL_MIN,
+                                     (int)COMPANION_DAILY_GOAL_MAX, &daily_goal))
+        valid = false;
+    next.daily_goal = (uint8_t)daily_goal;
 
     const cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "wifi_password");
     if (password && (!cJSON_IsString(password) || !password->valuestring)) valid = false;
@@ -428,6 +442,7 @@ static esp_err_t config_post_handler(httpd_req_t *request)
     }
     if (valid) valid = companion_config_validate(&next) == ESP_OK;
     esp_err_t result = valid ? companion_network_apply_config(&next) : ESP_ERR_INVALID_ARG;
+    if (result == ESP_OK) companion_model_set_daily_goal(next.daily_goal);
     cJSON_Delete(root);
     if (result != ESP_OK) return send_error(request, result == ESP_ERR_INVALID_ARG ? 400 : 500,
                                             result == ESP_ERR_INVALID_ARG ? "invalid settings" : "failed to save settings");

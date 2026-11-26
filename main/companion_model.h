@@ -13,6 +13,8 @@ typedef struct {
     uint32_t remaining_seconds;
     uint32_t total_seconds;
     uint32_t completed_sessions; /* today's completed focus rounds */
+    uint32_t daily_goal;         /* today's goal; completed may exceed it */
+    uint32_t streak;             /* consecutive local days the goal was met */
     bool online;
     bool time_valid;
     bool standby;
@@ -31,6 +33,8 @@ typedef struct {
     int64_t standby_until_epoch;
     bool work_hours_override;
     bool standby;
+    uint32_t streak;
+    bool goal_met_today;
 } companion_persist_snapshot_t;
 
 void companion_model_init(const companion_timer_t *timer);
@@ -43,6 +47,8 @@ void companion_model_snapshot(companion_state_t *out);
 void companion_model_persist_snapshot(companion_persist_snapshot_t *out);
 void companion_model_load_schedule(int32_t day_key, int64_t standby_until_epoch,
                                    bool work_hours_override);
+void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today);
+void companion_model_set_daily_goal(uint32_t daily_goal);
 void companion_model_start_fresh_focus(void);
 void companion_model_standby_until_morning(void);
 void companion_model_set_configured_brightness(uint8_t brightness);

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "companion_progress.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -20,6 +21,7 @@ typedef struct {
     char ota_url[COMPANION_URL_MAX + 1];
     char admin_token[COMPANION_ADMIN_TOKEN_MAX + 1];
     uint8_t brightness;
+    uint8_t daily_goal;
 } companion_config_t;
 
 typedef struct {
@@ -34,6 +36,8 @@ typedef struct {
     int64_t standby_until_epoch;
     int32_t day_key;
     bool work_hours_override;
+    uint32_t streak;
+    bool goal_met_today;
 } companion_timer_record_t;
 
 esp_err_t companion_config_init(void);

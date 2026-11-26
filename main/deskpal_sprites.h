@@ -9,6 +9,9 @@ enum {
     DESKPAL_CHAR_Y = 43,
     DESKPAL_STAGE_CX = 120,
     DESKPAL_STAGE_CY = 20,
+    /* "ND" left edge. cy matches the stage label. "999D" occupies x 10..42, y 16..24. */
+    DESKPAL_STREAK_X = 10,
+    DESKPAL_STREAK_CY = 20,
     DESKPAL_TIME_CX = 120,
     DESKPAL_TIME_CY = 198,
     DESKPAL_TODAY_CX = 120,

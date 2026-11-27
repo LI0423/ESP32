@@ -38,11 +38,19 @@ def main() -> int:
 
     status, state = request(base, "/api/status")
     assert status == 200 and state and "timer" in state, "status endpoint failed"
+    assert status == 200 and state and "pet" in state, "pet status missing"
+    pet = state["pet"]
+    for key in ("stage", "age_days", "satiety", "health", "mood", "hygiene",
+                "food", "medicine", "xp", "sick", "sick_reason"):
+        assert key in pet, f"pet status field missing: {key}"
     status, config = request(base, "/api/config")
     assert status == 200 and config and config.get("admin_token_set"), "config endpoint failed"
 
     status, _ = request(base, "/api/config", "POST", {"wifi_ssid": config["wifi_ssid"]})
     assert status == 401, f"unauthenticated config write returned {status}"
+
+    status, _ = request(base, "/api/pet/feed", "POST", {})
+    assert status == 401, f"unauthenticated pet action returned {status}"
 
     payload = {
         "wifi_ssid": config["wifi_ssid"],

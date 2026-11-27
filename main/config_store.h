@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "companion_pet.h"
 #include "companion_progress.h"
 #include "esp_err.h"
 
@@ -14,6 +15,10 @@ extern "C" {
 #define COMPANION_WIFI_PASS_MAX  64
 #define COMPANION_URL_MAX        256
 #define COMPANION_ADMIN_TOKEN_MAX 64
+#define COMPANION_PET_STORE_VERSION 2
+/* Version byte + 55-byte payload = 56 bytes: 3 BLOB_DATA span entries + 1 index. */
+#define COMPANION_PET_WIRE_SIZE 55u
+#define COMPANION_PET_STORE_SIZE (COMPANION_PET_WIRE_SIZE + 1u)
 
 typedef struct {
     char wifi_ssid[COMPANION_SSID_MAX + 1];
@@ -38,8 +43,13 @@ typedef struct {
     bool work_hours_override;
     uint32_t streak;
     bool goal_met_today;
-    bool missed_day; /* persisted sickness flag: a past day ended short of goal */
+    bool missed_day; /* legacy goal-based flag; no longer drives pet sickness */
 } companion_timer_record_t;
+
+typedef struct {
+    bool valid;
+    companion_pet_t pet;
+} companion_pet_record_t;
 
 esp_err_t companion_config_init(void);
 esp_err_t companion_config_get(companion_config_t *out);
@@ -53,6 +63,8 @@ bool companion_config_url_valid(const char *url);
 
 esp_err_t companion_store_load_timer(companion_timer_record_t *out);
 esp_err_t companion_store_save_timer(const companion_timer_record_t *record);
+esp_err_t companion_store_load_pet(companion_pet_record_t *out);
+esp_err_t companion_store_save_pet(const companion_pet_record_t *record);
 
 /* The old Desktop Status Pad used the same namespace and Wi-Fi keys. */
 #define PAD_CONFIG_URL_MAX COMPANION_URL_MAX

@@ -35,6 +35,20 @@ SPRITES = [
     ("deskpal_sprite_standby", "deskpal-char-standby-128.png", "timer"),
     ("deskpal_sprite_hungry", "deskpal-vitality-hungry-128.png", "vitality"),
     ("deskpal_sprite_sick", "deskpal-vitality-sick-128.png", "vitality"),
+    ("deskpal_sprite_baby", "pet-v2/deskpal-pet-baby-grok-128.png", "timer"),
+    ("deskpal_sprite_child", "pet-v2/deskpal-pet-child-grok-128.png", "timer"),
+    ("deskpal_sprite_teen", "pet-v2/deskpal-pet-teen-grok-128.png", "timer"),
+    ("deskpal_sprite_adult", "pet-v2/deskpal-pet-adult-grok-128.png", "timer"),
+    ("deskpal_sprite_action_feed", "pet-v2/deskpal-pet-action-feed-grok-128.png", "timer"),
+    ("deskpal_sprite_action_medicine", "pet-v2/deskpal-pet-action-medicine-grok-128.png", "timer"),
+    ("deskpal_sprite_action_play", "pet-v2/deskpal-pet-action-play-grok-128.png", "timer"),
+    ("deskpal_sprite_action_clean", "pet-v2/deskpal-pet-action-clean-grok-128.png", "timer"),
+]
+
+# Small HUD icons use the same timer palette but their own canvas size.
+SMALL_ICONS = [
+    ("deskpal_sick_pill", "pet-v2/deskpal-sick-pill-32.png", 32),
+    ("deskpal_hungry_rice", "pet-v2/deskpal-hungry-rice-32.png", 32),
 ]
 
 # Palette source per group. All four timer PNGs carry the identical palette, and
@@ -61,12 +75,14 @@ def load_palette(png: str) -> list[int]:
     return palette
 
 
-def load_indices(png: str) -> list[int]:
+def load_indices(png: str, size: int = SPRITE) -> list[int]:
     image = Image.open(ASSETS / png)
-    if image.mode != "P" or image.size != (SPRITE, SPRITE):
-        raise SystemExit(f"{png}: expected a {SPRITE}x{SPRITE} indexed PNG")
+    if image.mode != "P" or image.size != (size, size):
+        raise SystemExit(f"{png}: expected a {size}x{size} indexed PNG")
     if image.info.get("transparency") not in (None, TRANSPARENT):
         raise SystemExit(f"{png}: transparency index must be {TRANSPARENT}")
+    if hasattr(image, "get_flattened_data"):
+        return list(image.get_flattened_data())
     return list(image.getdata())
 
 
@@ -75,8 +91,8 @@ def format_palette(name: str, palette: list[int]) -> str:
     return f"const uint16_t {name}[{PALETTE_LEN}] = {{ {values} }};\n"
 
 
-def format_sprite(name: str, indices: list[int]) -> str:
-    lines = [f"const uint8_t {name}[{SPRITE} * {SPRITE}] = {{"]
+def format_sprite(name: str, indices: list[int], size: int = SPRITE) -> str:
+    lines = [f"const uint8_t {name}[{size} * {size}] = {{"]
     for start in range(0, len(indices), 16):
         chunk = ", ".join(str(value) for value in indices[start : start + 16])
         lines.append(f"    {chunk},")
@@ -115,6 +131,16 @@ def render() -> str:
         parts.append(format_sprite(name, indices))
         parts.append("\n")
 
+    for name, png, size in SMALL_ICONS:
+        indices = load_indices(png, size)
+        source = Image.open(ASSETS / png)
+        raw = source.getpalette() or []
+        colors = [tuple(raw[i * 3 : i * 3 + 3]) for i in range(PALETTE_LEN)]
+        if [rgb565(color) for color in colors] != timer_palette:
+            raise SystemExit(f"{png}: palette differs from {PALETTE_SOURCE['timer']}")
+        parts.append(format_sprite(name, indices, size))
+        parts.append("\n")
+
     parts.append(
         "const uint8_t *deskpal_sprite_data(deskpal_sprite_id_t id)\n"
         "{\n"
@@ -131,6 +157,22 @@ def render() -> str:
         "        return deskpal_sprite_hungry;\n"
         "    case DESKPAL_SPRITE_SICK:\n"
         "        return deskpal_sprite_sick;\n"
+        "    case DESKPAL_SPRITE_BABY:\n"
+        "        return deskpal_sprite_baby;\n"
+        "    case DESKPAL_SPRITE_CHILD:\n"
+        "        return deskpal_sprite_child;\n"
+        "    case DESKPAL_SPRITE_TEEN:\n"
+        "        return deskpal_sprite_teen;\n"
+        "    case DESKPAL_SPRITE_ADULT:\n"
+        "        return deskpal_sprite_adult;\n"
+        "    case DESKPAL_SPRITE_ACTION_FEED:\n"
+        "        return deskpal_sprite_action_feed;\n"
+        "    case DESKPAL_SPRITE_ACTION_MEDICINE:\n"
+        "        return deskpal_sprite_action_medicine;\n"
+        "    case DESKPAL_SPRITE_ACTION_PLAY:\n"
+        "        return deskpal_sprite_action_play;\n"
+        "    case DESKPAL_SPRITE_ACTION_CLEAN:\n"
+        "        return deskpal_sprite_action_clean;\n"
         "    default:\n"
         "        return deskpal_sprite_focus;\n"
         "    }\n"

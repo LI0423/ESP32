@@ -10,6 +10,7 @@ idf_component_register(
     SRCS
         "app_main.c"
         "companion_model.c"
+        "companion_pet.c"
         "companion_progress.c"
         "companion_schedule.c"
         "companion_serial.c"

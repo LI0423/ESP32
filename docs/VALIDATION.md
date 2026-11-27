@@ -1,48 +1,24 @@
 # Desktop Companion 验证记录
 
-验证日期：2026-11-25（产品规则更新后部分项待本轮命令实测补齐）
+验证日期：2026-11-27
 
-## 产品规则（本轮实现）
+## 本轮范围
 
-- 工作时段：CST-8 本地 08:00–22:00；之外自动待命并临时降亮
-- 取消 7 天墙钟快进；改为约 30 分钟 stale-save gap 恢复（见 README；明确不是“用户离开检测”）
-- 时间无效：不按墙钟乱切待命/乱降亮
-- 离线 UI：阶段表情与文案保持；仅右上角指示点反映网络
-- HTTPS 设置页：`POST /api/timer/focus`、`POST /api/timer/standby`（Bearer 令牌）
-- 庆祝默认约 8 秒；屏幕显示今日完成轮次（本地 00:00 清零）
-- 夜间「开始新一轮」使用 `work_hours_override`，避免立刻被时钟打回待命；「今晚先待命」挂到下一个 08:00（跨午夜不解除）
+完成 DeskPal 宠物 v2 的产品逻辑与接口实现：
 
-## 代码审查修复（既有）
+- 饱食度、健康、心情、清洁度、限量食物/药品、经验、年龄和四阶段成长
+- 喂食、用药、陪玩、清洁及冷却/库存规则
+- 饥饿、吃撑、脏污三类可恢复疾病；健康最低 10，不会死亡
+- 夜间半速消耗、最多 48 小时离线生理补算
+- 专注完成获得 XP/食物，每 4 轮额外获得药品
+- NVS schema v2 宠物记录、显式编码与范围校验
+- 旧计时器数据迁移；旧 `missed_day` 不再映射为宠物疾病
+- USB 串口 `feed / medicine / play / clean`
+- HTTPS 路由 `/api/pet/feed|medicine|play|clean`、状态中的 `pet` 对象和网页照护按钮
+- 屏幕阶段标签、照护属性行与 3 秒动作反馈
+- 接入 Grok 版四阶段与四动作索引精灵；休息/待命显示成长外观，照护显示动作素材
 
-本轮之前已修复：
-
-- HTTP JSON 解析释放后使用（UAF）
-- 管理接口无认证
-- HTTP 请求体无绝对接收期限
-- 首次生成令牌可能覆盖有效配置
-- 错误 WiFi 凭据可能导致设备失联
-- OTA 无总超时、无进展超时和取消机制
-- HTTPS 管理页面（自签名证书）
-- OTA 自动重定向已禁用
-- SNTP 初始化失败不重试
-- NVS 计时记录缺少版本和范围校验
-- LCD Kconfig 校准值被硬编码覆盖
-- 时间有效性没有新鲜度概念
-- 配网 AP 密码非法时静默开放
-- 关键任务未加入看门狗
-- 全屏渲染从 20Hz 降到 10Hz
-- 配置结构未初始化
-- NVS 保存失败无重试
-- 测试脚本、README 和 IDF 版本声明不一致
-
-Secure Boot V2 与 Flash Encryption 属于不可逆 eFuse 操作，未自动启用；生产部署前需单独规划签名密钥。
-
-## 构建
-
-- ESP-IDF v5.5.4 / ESP32-S3（以本机 `export.sh` 为准）
-- 应用：`build/desktop_companion.bin`
-- 既有记录大小约 **1.063MB** / OTA 槽剩余约 **32%**（本轮是否重新构建见文末实测栏）
-- 编译优化：`-Os`
+HTTPS 证书/私钥长度已修正为传入含结尾 NUL 的完整数组大小（`sizeof(...)`），与原 `sizeof(...)-1` 丢失 NUL 导致 mbedTLS 走 DER 路径的启动失败原因一致。网页 API 已构建，但本轮未执行 `http_smoke_test.py`。
 
 ## 主机测试
 
@@ -52,82 +28,100 @@ Secure Boot V2 与 Flash Encryption 属于不可逆 eFuse 操作，未自动启�
 bash tools/run_tests.sh
 ```
 
+实测输出：
+
+```text
+companion timer tests passed
+companion pet tests passed
+deskpal_sprites.c is up to date
+```
+
 覆盖：
 
-- 专注 / 庆祝 / 休息与跨阶段余量
-- 工作时段边界 08:00 / 22:00
-- 跨午夜手动待命与下一工作时段解除
-- 短间隔（&lt;30min）与长间隔（≥30min）恢复，含工作/非工作时段、不虚增轮次
-- 无效 / 未同步时间
-- 今日日界 day key
-- 离线阶段文案（不再使用 `Waiting for Wi-Fi`）
+- 原专注/庆祝/休息循环、08:00/22:00 边界、跨午夜待命、stale-save gap 恢复
+- 今日日界、目标修改、连续天数、旧 vitality 回归
+- 清醒每小时 `-4`、睡眠每小时 `-2`
+- 饥饿 6 小时生病、脏污 12 小时生病、2 小时内吃撑 2 次生病
+- 药品/清洁恢复、健康下限、动作冷却、缺物品、无效时间和时钟回拨保护
+- 每轮专注奖励、每 4 轮药品、年龄 + XP 阶段门槛
+- 48 小时离线补算上限与真实夜间消耗
+- 串口照护命令及非法参数
+- 14 张索引精灵与 2 枚 HUD 徽章（药丸、米饭碗）的数据/调色板访问和生成文件一致性
 
-实测结果：见文末「本轮命令实测」。
+## 固件构建
 
-## HTTPS 认证与 JSON 回归
+环境：ESP-IDF v5.5.4 / ESP32-S3。
 
-`tools/http_smoke_test.py`：需设备在线与管理令牌；逻辑仍覆盖认证与非法亮度/OTA URL。本轮未要求板端联调则不伪造通过结果。
-
-## WiFi / mDNS / NTP
-
-既有验证摘要：
-
-```text
-SSID=AI_pe
-deskpal.local -> 192.168.10.218
-wifi_mode=AP+STA
-NTP: ntp.aliyun.com + 162.159.200.1
-time_valid=true
-```
-
-WiFi 使用 AP+STA，STA 连接失败时仍保留 `DeskPal-Setup` 配网 AP。AP 默认密码为 `deskpal1`，管理接口另需设备令牌。
-
-## 计时恢复
-
-旧行为（7 天快进累加轮次）已移除。新策略见 README「重启恢复策略」。板端实测需在烧录本轮固件后观察串口 `boot policy action=...` 日志（本轮任务禁止 flash，故不伪造板端结果）。
-
-## OTA
-
-既有开发验证曾临时启用 HTTP OTA 并通过；生产配置保持：
-
-```text
-# CONFIG_COMPANION_OTA_ALLOW_HTTP is not set
-```
-
-## 看门狗与稳定性
-
-既有观察未发现 `task_wdt` / `panic` / `stack overflow`。UI 与 service 任务均订阅并主动喂养 Task Watchdog。
-
-## 管理令牌
-
-- 首次启动生成 24 位十六进制随机令牌
-- 只保存在板端 NVS
-- 网络 API 不返回令牌
-- USB 串口发送 `token` 可本地读取
-
-## 待确认
-
-- 陪伴角色最终视觉风格
-- 屏幕实际观感、亮度和庆祝动画
-- 生产环境启用 Secure Boot / Flash Encryption
-- 板端工作时段 / 手动待命 / 恢复策略的实机体验（需烧录，本轮不做）
-
-## 本轮命令实测
-
-本轮 Cursor CLI Agent 会话内所有 `Shell` 调用均被环境拒绝（返回 `Rejected:`，无 stdout）。因此：
-
-- `bash tools/run_tests.sh`：**未能在本会话执行**（请在本机项目根目录手动运行核对）
-- `idf.py build`：**未能在本会话执行**
-- `git status` / `git diff --stat`：**未能在本会话执行**
-
-ESP-IDF `export.sh` 路径 `/Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh` 可通过文件系统读取确认存在，但不代替实际构建结果。
-
-请在本机执行：
+命令：
 
 ```bash
-cd /Users/litengjiang/Desktop/MyCode/ESP32/DesktopCompanion
-bash tools/run_tests.sh
-source /Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh && idf.py build
-git status
-git diff --stat
+source /Users/litengjiang/.espressif/v5.5.4/esp-idf/export.sh
+idf.py build
 ```
+
+实测结果：**Project build complete**。
+
+```text
+desktop_companion.bin binary size: 0x13dac0 bytes
+decimal:                          1,301,184 bytes (about 1.241MB)
+smallest app partition:           0x180000
+free in app partition:            0x42540 (17.3%)
+```
+
+## 实机验收（2026-11-27）
+
+设备：ESP32-S3，`/dev/cu.usbmodem1401`，USB Serial/JTAG 控制台；已烧录最终固件。
+
+- 启动后 SNTP 同步成功，`status` 中 `time_valid=true`、`online=true`，时钟正常
+- `status` 包含完整 `pet` 对象，阶段、年龄、四项属性、食物/药品、XP、专注轮次、生病原因齐全
+- 串口照护命令实测：
+  - 饱食高于 90 时 `feed` 返回 `overfed`（健康 −10、食物 −1），紧接着再次 `feed` 返回 `cooldown`
+  - `clean`、`play` 返回 `ok`；未生病时 `medicine` 返回 `not_sick`
+  - `goal 6` 保存成功；`goal 0` 被拒绝并打印用法
+- NVS 持久化：打开 USB 串口会复位板子，重启后 `food / health / mood / hygiene / xp / goal` 全部保持，验证属性变更会写入且能恢复
+- `standby` 后进入待命、轮次不再增加；`focus` 后立刻回到 1500 秒专注
+- HUD 徽章：通过临时演示固件分别注入吃撑病和饥饿状态，确认药丸与米饭碗按规则显示；临时代码已删除，最终固件不含演示逻辑
+- 徽章规则：药丸仅在“药能治”的生病状态显示（吃撑病，或已喂食后的饥饿病）；米饭碗在饱食 <30 或饥饿病时显示；两者互斥、生病优先、1Hz 闪烁
+- 本轮未执行网页 API / OTA / Secure Boot 相关实机验证
+
+## 美术素材
+
+- Grok 原始概念图：`assets/deskpal/pet-v2/grok-growth-stages.jpg`、`grok-action-sheet.jpg`
+- 处理后素材：8 张 128×128、P 模式、index 0 透明、最多 32 色的索引 PNG
+- 已加入 `tools/gen_deskpal_sprites.py`，生成 14 张精灵与 2 枚 HUD 徽章（药丸、米饭碗）的 C 数组
+- 徽章由 `tools/gen_sick_pill_icon.py` 和 `tools/gen_hunger_icon.py` 按共享调色板生成，含 16/24/32px 版本与屏幕预览
+- 新素材约 128KB 索引数据，当前嵌入 app；OTA 槽剩余约 17.3%
+- 完整表情包或更多动画帧后续应迁移到 6MB `assets` 分区
+- 制作规范见 `assets/deskpal/pet-v2/ART_REQUIREMENTS.md`
+
+## 代码审查与安全检查
+
+保留并沿用此前修复：
+
+- HTTP JSON 解析释放后使用（UAF）
+- 管理接口认证与常量时间令牌比较
+- HTTP 请求体大小、类型和绝对接收期限
+- 错误 WiFi 凭据下保留配网 AP
+- OTA 总超时、无进展超时和取消
+- SNTP 初始化失败重试
+- NVS 计时记录版本与范围校验
+- 看门狗订阅与主动喂养
+- LCD 校准值不被硬编码覆盖
+
+宠物持久化使用定长显式小端编码，不直接保存带填充的 C 结构体；完整 blob 为 56 字节（版本字节 + 55 字节负载），占用三个 BLOB_DATA 跨度项和一个索引项。NVS 空间不足时会先清理已废弃的 DesktopStatusPad 键再重试。读取时校验版本、长度、范围、疾病原因和时间戳；阶段和分数累积时间在加载时重建。
+
+## 已知限制 / 待实测
+
+- 网页 API 尚未实机验证（本轮未运行 `tools/http_smoke_test.py`），自签名证书需浏览器手动信任
+- OTA 端到端流程、成功后 NVS 宠物记录恢复尚未实机验证
+- 跨午夜年龄增长、夜间半速消耗、最长 48 小时离线补算仍需长时间板端验证
+- 旧 NVS 迁移不会把 `missed_day` 变成生病，仍需在旧版设备上验证
+- 生产环境启用 Secure Boot / Flash Encryption 仍需单独规划
+
+## 后续板端验证清单
+
+1. 运行 `tools/http_smoke_test.py` 与网页照护按钮流程
+2. 注入饥饿/脏污状态，确认米饭徽章、疾病恢复与健康下限
+3. 验证跨午夜年龄增长、夜间半速和重启后最多 48 小时补算
+4. 验证 OTA 后宠物记录仍可恢复
+5. 在生产环境规划签名密钥并启用 Secure Boot / Flash Encryption

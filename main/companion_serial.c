@@ -71,6 +71,22 @@ void companion_serial_parse(const char *line, companion_serial_result_t *out)
         out->command = no_args ? COMPANION_SERIAL_CMD_STANDBY : COMPANION_SERIAL_CMD_INVALID;
         return;
     }
+    if (word_is(word, word_length, "feed")) {
+        out->command = no_args ? COMPANION_SERIAL_CMD_FEED : COMPANION_SERIAL_CMD_INVALID;
+        return;
+    }
+    if (word_is(word, word_length, "medicine")) {
+        out->command = no_args ? COMPANION_SERIAL_CMD_MEDICINE : COMPANION_SERIAL_CMD_INVALID;
+        return;
+    }
+    if (word_is(word, word_length, "play")) {
+        out->command = no_args ? COMPANION_SERIAL_CMD_PLAY : COMPANION_SERIAL_CMD_INVALID;
+        return;
+    }
+    if (word_is(word, word_length, "clean")) {
+        out->command = no_args ? COMPANION_SERIAL_CMD_CLEAN : COMPANION_SERIAL_CMD_INVALID;
+        return;
+    }
     if (word_is(word, word_length, "goal")) {
         uint32_t goal = 0;
         if (!parse_uint(rest, &goal) ||

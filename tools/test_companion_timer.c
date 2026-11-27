@@ -210,6 +210,78 @@ static companion_progress_t progress_with(uint32_t completed, uint32_t goal, uin
     return progress;
 }
 
+static companion_progress_t progress_with_missed(uint32_t completed, uint32_t goal,
+                                                 int32_t day_key, bool missed_day)
+{
+    companion_progress_t progress = progress_with(completed, goal, 0, day_key, false);
+    progress.missed_day = missed_day;
+    return progress;
+}
+
+static void test_vitality_states(void)
+{
+    /* Met yesterday, midnight passes: Today 0/4, 1D-ish streak, hungry not sick. */
+    companion_progress_t progress = progress_with(4, 4, 6, 20261125, true);
+    companion_progress_roll_day(&progress, 20261126, 1);
+    assert(progress.completed == 0 && !progress.goal_met_today);
+    assert(progress.streak == 6);
+    assert(!progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_HUNGRY);
+
+    /* Yesterday ended short of goal -> sick. */
+    progress = progress_with(3, 4, 5, 20261125, false);
+    companion_progress_roll_day(&progress, 20261126, 1);
+    assert(progress.streak == 0);
+    assert(progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_SICK);
+    /* Staying on the same day keeps it sick until the goal is met. */
+    companion_progress_sync(&progress, 2);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_SICK);
+
+    /* Meeting today's goal recovers to full and clears the flag. */
+    companion_progress_sync(&progress, 4);
+    assert(progress.missed_day == false);
+    assert(progress.goal_met_today);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_FULL);
+
+    /* A skipped day (gap > 1) is a miss even if yesterday looked met. */
+    progress = progress_with(4, 4, 6, 20261125, true);
+    companion_progress_roll_day(&progress, 20261127, 2);
+    assert(progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_SICK);
+
+    /* First use / first sync never looks sick, even with no streak. */
+    progress = progress_with(0, 4, 0, 0, false);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_HUNGRY);
+    assert(companion_progress_vitality(&progress, false) == COMPANION_VITALITY_HUNGRY);
+    companion_progress_roll_day(&progress, 20261126, 0);
+    assert(!progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_HUNGRY);
+
+    /* Invalid clock (USB restart before NTP): do not judge sick. */
+    progress = progress_with_missed(0, 4, 20261126, true);
+    assert(companion_progress_vitality(&progress, false) == COMPANION_VITALITY_HUNGRY);
+    /* A met goal is full regardless of the clock. */
+    progress.completed = 4;
+    assert(companion_progress_vitality(&progress, false) == COMPANION_VITALITY_FULL);
+
+    /* Backward clock step does not invent a miss. */
+    progress = progress_with(4, 4, 6, 20261126, true);
+    companion_progress_roll_day(&progress, 20261125, -1);
+    assert(!progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_HUNGRY);
+
+    /* Lowering the goal onto today's count recovers a sick pet to full. */
+    progress = progress_with_missed(2, 4, 20261126, true);
+    companion_progress_set_goal(&progress, 2);
+    assert(!progress.missed_day);
+    assert(companion_progress_vitality(&progress, true) == COMPANION_VITALITY_FULL);
+
+    assert(strcmp(companion_vitality_name(COMPANION_VITALITY_FULL), "full") == 0);
+    assert(strcmp(companion_vitality_name(COMPANION_VITALITY_HUNGRY), "hungry") == 0);
+    assert(strcmp(companion_vitality_name(COMPANION_VITALITY_SICK), "sick") == 0);
+}
+
 static void test_goal_default_and_change(void)
 {
     companion_progress_t progress;
@@ -440,6 +512,7 @@ int main(void)
     test_goal_default_and_change();
     test_streak_on_met_and_missed_day();
     test_day_boundary_gap();
+    test_vitality_states();
     test_hud_anchors_unchanged();
     test_manual_focus_override_boundary();
     test_serial_commands();

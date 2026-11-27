@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "companion_timer.h"
+#include "companion_progress.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,8 +20,10 @@ typedef struct {
     bool time_valid;
     bool standby;
     bool work_hours_override;
+    bool missed_day;             /* persisted sick flag (past day unmet) */
     int32_t day_key;
     int64_t standby_until_epoch;
+    companion_vitality_t vitality; /* full / hungry / sick */
     char clock[9];
     char date[16];
 } companion_state_t;
@@ -35,6 +38,7 @@ typedef struct {
     bool standby;
     uint32_t streak;
     bool goal_met_today;
+    bool missed_day;
 } companion_persist_snapshot_t;
 
 void companion_model_init(const companion_timer_t *timer);
@@ -47,7 +51,8 @@ void companion_model_snapshot(companion_state_t *out);
 void companion_model_persist_snapshot(companion_persist_snapshot_t *out);
 void companion_model_load_schedule(int32_t day_key, int64_t standby_until_epoch,
                                    bool work_hours_override);
-void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today);
+void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today,
+                                   bool missed_day);
 void companion_model_set_daily_goal(uint32_t daily_goal);
 void companion_model_start_fresh_focus(void);
 void companion_model_standby_until_morning(void);

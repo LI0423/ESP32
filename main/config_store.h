@@ -38,6 +38,7 @@ typedef struct {
     bool work_hours_override;
     uint32_t streak;
     bool goal_met_today;
+    bool missed_day; /* persisted sickness flag: a past day ended short of goal */
 } companion_timer_record_t;
 
 esp_err_t companion_config_init(void);

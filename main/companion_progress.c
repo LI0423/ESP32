@@ -35,6 +35,7 @@ void companion_progress_sync(companion_progress_t *progress, uint32_t completed)
     if (met && !progress->goal_met_today) {
         if (progress->streak < COMPANION_STREAK_STORE_MAX) progress->streak++;
         progress->goal_met_today = true;
+        progress->missed_day = false; /* met today: sick recovers to full */
     } else if (!met && progress->goal_met_today) {
         if (progress->streak > 0) progress->streak--;
         progress->goal_met_today = false;
@@ -78,6 +79,10 @@ void companion_progress_roll_day(companion_progress_t *progress, int32_t today, 
         return;
     }
     if (gap_days == 1) {
+        /* Yesterday met (counted or not yet counted) keeps the pet healthy. */
+        bool met_yesterday = progress->goal_met_today ||
+                             progress->completed >= progress->goal;
+        progress->missed_day = !met_yesterday;
         if (!progress->goal_met_today) {
             if (progress->completed >= progress->goal) {
                 if (progress->streak < COMPANION_STREAK_STORE_MAX) progress->streak++;
@@ -87,10 +92,35 @@ void companion_progress_roll_day(companion_progress_t *progress, int32_t today, 
         }
     } else {
         progress->streak = 0;
+        progress->missed_day = true;
     }
     progress->completed = 0;
     progress->goal_met_today = false;
     progress->day_key = today;
+}
+
+companion_vitality_t companion_progress_vitality(const companion_progress_t *progress,
+                                                 bool time_valid)
+{
+    if (!progress) return COMPANION_VITALITY_HUNGRY;
+    if (progress->completed >= progress->goal) return COMPANION_VITALITY_FULL;
+    /*
+     * Never judge sick without a valid clock or before the first wall-clock
+     * sync: a USB restart before NTP, or a brand-new pad, must not look sick.
+     */
+    if (!time_valid || progress->day_key == 0) return COMPANION_VITALITY_HUNGRY;
+    if (progress->missed_day) return COMPANION_VITALITY_SICK;
+    return COMPANION_VITALITY_HUNGRY;
+}
+
+const char *companion_vitality_name(companion_vitality_t vitality)
+{
+    switch (vitality) {
+    case COMPANION_VITALITY_FULL: return "full";
+    case COMPANION_VITALITY_SICK: return "sick";
+    case COMPANION_VITALITY_HUNGRY:
+    default: return "hungry";
+    }
 }
 
 void companion_progress_format_today(char *out, size_t capacity,

@@ -22,7 +22,17 @@ typedef struct {
     uint32_t streak;      /* consecutive met days, including today once counted */
     int32_t day_key;      /* local YYYYMMDD for `completed`, 0 if unknown */
     bool goal_met_today;  /* streak already includes day_key */
+    bool missed_day;      /* a past day ended short of goal: vitality may be sick */
 } companion_progress_t;
+
+/* Three vitality looks. Full is derived from today's count; sick needs a
+ * missed day remembered across reboots, so it is not inferable from streak 0
+ * (first use is also 0). */
+typedef enum {
+    COMPANION_VITALITY_FULL = 0,
+    COMPANION_VITALITY_HUNGRY,
+    COMPANION_VITALITY_SICK,
+} companion_vitality_t;
 
 void companion_progress_reset(companion_progress_t *progress);
 uint32_t companion_progress_sanitize_goal(uint32_t goal);
@@ -43,8 +53,23 @@ void companion_progress_sync(companion_progress_t *progress, uint32_t completed)
  * met and reset the streak to 0 when it was not.
  * gap_days > 1: at least one full day was missed, so the streak becomes 0.
  * A new day always clears `completed` and `goal_met_today`.
+ *
+ * `missed_day` is set when a day boundary shows yesterday short of the goal
+ * (gap_days == 1) or a skipped day (gap_days > 1). Meeting today's goal in
+ * companion_progress_sync() clears it again (sick -> full recovery). The
+ * first sync (day_key == 0) and a backward clock step never set it.
  */
 void companion_progress_roll_day(companion_progress_t *progress, int32_t today, int gap_days);
+
+/*
+ * full   : today's goal already met (completed >= goal).
+ * hungry : goal not met and the pet is not sick.
+ * sick   : goal not met, time is valid, the day is known and a past day was
+ *          missed. Time invalid or first use never reports sick.
+ */
+companion_vitality_t companion_progress_vitality(const companion_progress_t *progress,
+                                                 bool time_valid);
+const char *companion_vitality_name(companion_vitality_t vitality);
 
 void companion_progress_format_today(char *out, size_t capacity,
                                      uint32_t completed, uint32_t goal);

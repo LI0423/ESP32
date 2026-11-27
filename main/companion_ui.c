@@ -72,13 +72,23 @@ static void draw_centered_pixel_text(int cx, int cy, const char *value, int scal
     draw_pixel_text(cx - w / 2, cy - h / 2, value, scale, color);
 }
 
-static void draw_character(companion_phase_t phase)
+static void draw_character(const companion_state_t *state)
 {
-    const uint8_t *sprite = deskpal_sprite_data(phase_sprite(phase));
-    if (!sprite) return;
+    if (!state) return;
+    /*
+     * full keeps the timer-phase face. hungry/sick swap in the vitality face
+     * at the same box; the stage label, colors and HUD stay phase-driven.
+     */
+    deskpal_sprite_id_t id = phase_sprite(state->phase);
+    if (state->vitality == COMPANION_VITALITY_HUNGRY) id = DESKPAL_SPRITE_HUNGRY;
+    else if (state->vitality == COMPANION_VITALITY_SICK) id = DESKPAL_SPRITE_SICK;
+
+    const uint8_t *sprite = deskpal_sprite_data(id);
+    const uint16_t *palette = deskpal_sprite_palette(id);
+    if (!sprite || !palette) return;
     lcd_blit_indexed(DESKPAL_CHAR_X, DESKPAL_CHAR_Y,
                      DESKPAL_CHAR_W, DESKPAL_CHAR_H,
-                     sprite, deskpal_palette, DESKPAL_PALETTE_LEN,
+                     sprite, palette, DESKPAL_PALETTE_LEN,
                      DESKPAL_TRANSPARENT_INDEX);
 }
 
@@ -97,7 +107,7 @@ void companion_ui_render(const companion_state_t *state)
     if (!state) return;
 
     lcd_clear(phase_background(state->phase));
-    draw_character(state->phase);
+    draw_character(state);
 
     uint16_t text = hud_text_color();
     char streak[8];

@@ -341,12 +341,16 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     }
     int streak = 0;
     int goal_met = 0;
+    int missed = 0;
     if (err == ESP_OK && version == 1) {
         err = read_i32(nvs, "tm_streak", &streak, 0);
         if (err == ESP_OK) err = read_i32(nvs, "tm_goal_met", &goal_met, 0);
+        /* "tm_missed" is 9 chars, inside the 15-char NVS key limit. */
+        if (err == ESP_OK) err = read_i32(nvs, "tm_missed", &missed, 0);
     }
     if (streak < 0 || streak > 1000000) streak = 0;
     if (goal_met != 1) goal_met = 0;
+    if (missed != 1) missed = 0;
     nvs_close(nvs);
     if (err != ESP_OK) return err;
 
@@ -379,6 +383,7 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
         out->work_hours_override = override == 1;
         out->streak = (uint32_t)streak;
         out->goal_met_today = goal_met == 1;
+        out->missed_day = missed == 1;
     }
     return ESP_OK;
 }
@@ -403,6 +408,8 @@ esp_err_t companion_store_save_timer(const companion_timer_record_t *record)
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_override", record->work_hours_override ? 1 : 0);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_streak", (int32_t)record->streak);
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_goal_met", record->goal_met_today ? 1 : 0);
+    /* "tm_missed" is 9 chars, inside the 15-char NVS key limit. */
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_missed", record->missed_day ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;

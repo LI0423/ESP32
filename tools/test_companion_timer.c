@@ -440,6 +440,16 @@ static void test_hud_anchors_unchanged(void)
     assert(DESKPAL_FONT_W == 8 && DESKPAL_FONT_H == 8);
     assert(DESKPAL_STREAK_CY - DESKPAL_FONT_H / 2 == 16);
     assert(DESKPAL_STREAK_X + 4 * DESKPAL_FONT_W == 42);
+
+    assert(DESKPAL_SPRITE_COUNT == 14);
+    for (int id = 0; id < DESKPAL_SPRITE_COUNT; id++) {
+        assert(deskpal_sprite_data((deskpal_sprite_id_t)id) != NULL);
+        assert(deskpal_sprite_palette((deskpal_sprite_id_t)id) != NULL);
+    }
+    assert(deskpal_sprite_data(DESKPAL_SPRITE_BABY) != deskpal_sprite_data(DESKPAL_SPRITE_ADULT));
+    assert(deskpal_sprite_palette(DESKPAL_SPRITE_BABY) == deskpal_sprite_palette(DESKPAL_SPRITE_FOCUS));
+    assert(deskpal_sick_pill != NULL);
+    assert(deskpal_hungry_rice != NULL);
 }
 
 static void test_manual_focus_override_boundary(void)
@@ -468,6 +478,14 @@ static void test_serial_commands(void)
     assert(result.command == COMPANION_SERIAL_CMD_FOCUS);
     companion_serial_parse("standby", &result);
     assert(result.command == COMPANION_SERIAL_CMD_STANDBY);
+    companion_serial_parse("feed", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_FEED);
+    companion_serial_parse("medicine", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_MEDICINE);
+    companion_serial_parse("play", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_PLAY);
+    companion_serial_parse("clean", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_CLEAN);
     companion_serial_parse("token", &result);
     assert(result.command == COMPANION_SERIAL_CMD_TOKEN);
     companion_serial_parse("status", &result);
@@ -499,6 +517,11 @@ static void test_serial_commands(void)
         companion_serial_parse(unknown[i], &result);
         assert(result.command == COMPANION_SERIAL_CMD_UNKNOWN);
     }
+
+    companion_serial_parse("feed now", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_INVALID);
+    companion_serial_parse("medicine 1", &result);
+    assert(result.command == COMPANION_SERIAL_CMD_INVALID);
 }
 
 int main(void)

@@ -27,6 +27,7 @@
 static SemaphoreHandle_t s_output_lock;
 static companion_timer_t s_boot_timer;
 static companion_timer_record_t s_boot_record;
+static companion_pet_record_t s_boot_pet_record;
 static bool s_restore_pending;
 static bool s_timer_dirty;
 
@@ -34,11 +35,15 @@ static void publish_status(void)
 {
     companion_state_t state;
     companion_model_snapshot(&state);
-    char line[384];
+    char line[768];
     int length = snprintf(line, sizeof(line),
         "{\"v\":1,\"type\":\"status\",\"phase\":\"%s\",\"remaining\":%lu,"
         "\"total\":%lu,\"completed\":%lu,\"goal\":%lu,\"streak\":%lu,"
         "\"vitality\":\"%s\","
+        "\"pet\":{\"stage\":\"%s\",\"age_days\":%lu,\"satiety\":%u,"
+        "\"health\":%u,\"mood\":%u,\"hygiene\":%u,\"food\":%u,"
+        "\"medicine\":%u,\"xp\":%lu,\"focus_count\":%lu,\"sick\":%s,"
+        "\"sick_reason\":\"%s\"},"
         "\"online\":%s,\"time_valid\":%s,"
         "\"standby\":%s,\"clock\":\"%s\",\"date\":\"%s\"}\n",
         companion_phase_name(state.phase),
@@ -48,6 +53,14 @@ static void publish_status(void)
         (unsigned long)state.daily_goal,
         (unsigned long)state.streak,
         companion_vitality_name(state.vitality),
+        companion_pet_stage_name((companion_pet_stage_t)state.pet.stage),
+        (unsigned long)state.pet.age_days,
+        state.pet.satiety, state.pet.health, state.pet.mood, state.pet.hygiene,
+        state.pet.food, state.pet.medicine,
+        (unsigned long)state.pet.xp,
+        (unsigned long)state.pet.focus_count,
+        state.pet.sick ? "true" : "false",
+        companion_pet_sick_reason_name((companion_pet_sick_reason_t)state.pet.sick_reason),
         state.online ? "true" : "false",
         state.time_valid ? "true" : "false",
         state.standby ? "true" : "false",
@@ -59,7 +72,7 @@ static void publish_status(void)
     xSemaphoreGive(s_output_lock);
 }
 
-static void save_current_timer(void)
+static void save_current_state(void)
 {
     companion_persist_snapshot_t snap;
     companion_model_persist_snapshot(&snap);
@@ -80,12 +93,51 @@ static void save_current_timer(void)
         .goal_met_today = snap.goal_met_today,
         .missed_day = snap.missed_day,
     };
-    esp_err_t err = companion_store_save_timer(&record);
+    companion_pet_record_t pet_record = {
+        .valid = true,
+        .pet = snap.pet,
+    };
+    esp_err_t err = companion_store_save_pet(&pet_record);
+    if (err == ESP_OK) err = companion_store_save_timer(&record);
     if (err == ESP_OK) s_timer_dirty = false;
     else {
         s_timer_dirty = true;
-        ESP_LOGW(TAG, "timer save failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "state save failed: %s", esp_err_to_name(err));
     }
+}
+
+static void prepare_boot_pet(void)
+{
+    memset(&s_boot_pet_record, 0, sizeof(s_boot_pet_record));
+    esp_err_t err = companion_store_load_pet(&s_boot_pet_record);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "pet load failed: %s", esp_err_to_name(err));
+        s_boot_pet_record.valid = false;
+    }
+    if (s_boot_pet_record.valid) return;
+
+    /* Schema v2 migration: retain legacy focus history, never legacy sickness. */
+    companion_pet_reset(&s_boot_pet_record.pet);
+    if (s_boot_record.valid) {
+        s_boot_pet_record.pet.focus_count = s_boot_record.completed_sessions;
+        s_boot_pet_record.pet.xp = s_boot_record.completed_sessions > COMPANION_PET_XP_MAX / 20u
+            ? COMPANION_PET_XP_MAX
+            : s_boot_record.completed_sessions * 20u;
+        s_boot_pet_record.pet.born_day = s_boot_record.day_key;
+        s_boot_pet_record.pet.last_update_epoch = s_boot_record.saved_epoch;
+        if (s_boot_pet_record.pet.born_day == 0 &&
+            companion_time_plausible(s_boot_record.saved_epoch)) {
+            time_t saved = (time_t)s_boot_record.saved_epoch;
+            struct tm local = {0};
+            if (localtime_r(&saved, &local))
+                s_boot_pet_record.pet.born_day = companion_local_day_key(&local);
+        }
+    }
+    companion_pet_sanitize(&s_boot_pet_record.pet);
+    s_boot_pet_record.valid = true;
+    ESP_LOGI(TAG, "pet schema v2 migrated: focus_count=%lu xp=%lu",
+             (unsigned long)s_boot_pet_record.pet.focus_count,
+             (unsigned long)s_boot_pet_record.pet.xp);
 }
 
 /*
@@ -134,14 +186,14 @@ static void service_task(void *arg)
             elapsed_ms += (uint32_t)(delta_us / 1000);
             while (elapsed_ms >= 1000u) {
                 elapsed_ms -= 1000u;
-                if (companion_model_tick(1)) save_current_timer();
+                companion_model_tick(1);
             }
         }
-        if (companion_model_persist_requested()) save_current_timer();
+        if (companion_model_persist_requested()) save_current_state();
         apply_brightness_if_needed();
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         if (s_timer_dirty && (uint32_t)(now_ms - last_save_attempt) >= 5000u) {
-            save_current_timer();
+            save_current_state();
             last_save_attempt = now_ms;
         }
         vTaskDelayUntil(&last, pdMS_TO_TICKS(SERVICE_PERIOD_MS));
@@ -180,6 +232,16 @@ static void print_serial_line(const char *text)
     xSemaphoreGive(s_output_lock);
 }
 
+static void handle_pet_action(companion_pet_action_t action, const char *name)
+{
+    companion_pet_action_result_t result = companion_model_pet_action(action);
+    char ack[96];
+    snprintf(ack, sizeof(ack), "pet %s: %s\n", name,
+             companion_pet_action_result_name(result));
+    print_serial_line(ack);
+    publish_status();
+}
+
 /* USB serial: same effects as the settings page, persisted to NVS. */
 static void handle_serial_command(const char *line)
 {
@@ -189,7 +251,7 @@ static void handle_serial_command(const char *line)
     case COMPANION_SERIAL_CMD_UNKNOWN:
         break;
     case COMPANION_SERIAL_CMD_INVALID:
-        print_serial_line("error: usage: goal <1-99> | focus | standby | status | token\n");
+        print_serial_line("error: usage: goal <1-99> | focus | standby | feed | medicine | play | clean | status | token\n");
         break;
     case COMPANION_SERIAL_CMD_TOKEN: {
         companion_config_t current;
@@ -228,6 +290,18 @@ static void handle_serial_command(const char *line)
         print_serial_line("standby until next 08:00\n");
         publish_status();
         break;
+    case COMPANION_SERIAL_CMD_FEED:
+        handle_pet_action(COMPANION_PET_ACTION_FEED, "feed");
+        break;
+    case COMPANION_SERIAL_CMD_MEDICINE:
+        handle_pet_action(COMPANION_PET_ACTION_MEDICINE, "medicine");
+        break;
+    case COMPANION_SERIAL_CMD_PLAY:
+        handle_pet_action(COMPANION_PET_ACTION_PLAY, "play");
+        break;
+    case COMPANION_SERIAL_CMD_CLEAN:
+        handle_pet_action(COMPANION_PET_ACTION_CLEAN, "clean");
+        break;
     }
 }
 
@@ -262,11 +336,13 @@ void app_main(void)
         companion_timer_restore(&s_boot_timer, (companion_phase_t)s_boot_record.phase,
                                 s_boot_record.remaining_seconds, s_boot_record.completed_sessions);
     } else {
+        s_boot_record.valid = false;
         s_boot_record.saved_epoch = 0;
         s_boot_record.standby_until_epoch = 0;
         s_boot_record.day_key = 0;
         s_boot_record.work_hours_override = false;
     }
+    prepare_boot_pet();
     s_restore_pending = true;
     companion_model_init(&s_boot_timer);
     companion_model_set_configured_brightness(brightness);
@@ -274,6 +350,7 @@ void app_main(void)
                                   s_boot_record.work_hours_override);
     companion_model_load_progress(daily_goal, s_boot_record.streak, s_boot_record.goal_met_today,
                                   s_boot_record.missed_day);
+    companion_model_load_pet(&s_boot_pet_record.pet);
     companion_ui_init();
     pad_ota_init();
 
@@ -290,8 +367,8 @@ void app_main(void)
     }
     companion_network_init();
 
-    printf("\n=== Desktop Companion v1 ===\n");
-    printf("Automatic focus/break timer; no physical controls.\n\n");
+    printf("\n=== Desktop Companion v2 ===\n");
+    printf("Living desktop pet with an auxiliary focus/break timer; no physical controls.\n\n");
     fflush(stdout);
 
     char command[COMPANION_SERIAL_LINE_MAX];

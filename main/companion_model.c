@@ -17,6 +17,7 @@ static int64_t s_standby_until_epoch;
 static bool s_work_hours_override;
 static int32_t s_day_key;
 static companion_progress_t s_progress;
+static companion_pet_t s_pet;
 static bool s_brightness_dirty;
 static bool s_persist_request;
 static uint8_t s_last_brightness = 255;
@@ -55,7 +56,8 @@ static void sync_state_locked(void)
     s_state.day_key = s_day_key;
     s_state.standby_until_epoch = s_standby_until_epoch;
     s_state.missed_day = s_progress.missed_day;
-    s_state.vitality = companion_progress_vitality(&s_progress, s_state.time_valid);
+    s_state.vitality = companion_pet_vitality(&s_pet);
+    s_state.pet = s_pet;
 }
 
 static void mark_brightness_locked(void)
@@ -99,6 +101,8 @@ static void rollover_today_locked(bool time_valid)
     bool missed_before = s_progress.missed_day;
     uint32_t completed_before = s_timer.completed_sessions;
     int32_t day_before = s_day_key;
+    uint8_t pet_stage_before = s_pet.stage;
+    int32_t pet_born_before = s_pet.born_day;
     int gap = 0;
     if (s_day_key != 0 && s_day_key != today)
         gap = companion_day_key_gap(s_day_key, today);
@@ -106,11 +110,13 @@ static void rollover_today_locked(bool time_valid)
     s_progress.completed = s_timer.completed_sessions;
     s_progress.day_key = s_day_key;
     companion_progress_roll_day(&s_progress, today, gap);
+    companion_pet_roll_day(&s_pet, today, gap);
     s_timer.completed_sessions = s_progress.completed;
     s_day_key = s_progress.day_key;
     if (streak_before != s_progress.streak || met_before != s_progress.goal_met_today ||
         missed_before != s_progress.missed_day ||
-        completed_before != s_timer.completed_sessions || day_before != s_day_key)
+        completed_before != s_timer.completed_sessions || day_before != s_day_key ||
+        pet_stage_before != s_pet.stage || pet_born_before != s_pet.born_day)
         s_persist_request = true;
 }
 
@@ -179,6 +185,7 @@ void companion_model_init(const companion_timer_t *timer)
     s_work_hours_override = false;
     s_day_key = 0;
     companion_progress_reset(&s_progress);
+    companion_pet_reset(&s_pet);
     s_brightness_dirty = true;
     s_last_brightness = 255;
     sync_state_locked();
@@ -194,7 +201,6 @@ bool companion_model_tick(uint32_t elapsed_seconds)
     if (!s_lock || elapsed_seconds == 0) return false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     companion_phase_t before = s_timer.phase;
-    uint32_t completed_before = s_timer.completed_sessions;
     bool standby_before = s_state.standby;
     int64_t standby_until_before = s_standby_until_epoch;
     bool override_before = s_work_hours_override;
@@ -202,15 +208,42 @@ bool companion_model_tick(uint32_t elapsed_seconds)
     uint32_t streak_before = s_progress.streak;
     bool met_before = s_progress.goal_met_today;
     bool missed_before = s_progress.missed_day;
+    uint8_t action_seconds_before = s_state.pet_action_seconds;
 
     rollover_today_locked(s_state.time_valid);
     apply_schedule_locked();
+    uint32_t completed_before = s_timer.completed_sessions;
     if (s_timer.phase != COMPANION_PHASE_STANDBY)
         companion_timer_advance(&s_timer, elapsed_seconds);
+
+    bool pet_changed = false;
+    if (s_state.time_valid) {
+        pet_changed = companion_pet_catch_up(&s_pet, s_state.standby, true, (int64_t)time(NULL));
+    }
+    if (s_timer.completed_sessions > completed_before) {
+        uint32_t earned = s_timer.completed_sessions - completed_before;
+        while (earned-- > 0) companion_pet_on_focus_completed(&s_pet);
+        pet_changed = true;
+        s_persist_request = true;
+    }
+    if (pet_changed) s_persist_request = true;
+
+    if (s_state.pet_action_seconds > 0) {
+        s_state.pet_action_seconds--;
+        if (s_state.pet_action_seconds == 0) {
+            s_state.pet_action = COMPANION_PET_ACTION_NONE;
+            s_state.pet_action_result = COMPANION_PET_ACTION_OK;
+        }
+    }
+
     sync_progress_count_locked();
     sync_state_locked();
     update_clock_locked();
     mark_brightness_locked();
+
+    if (before != s_timer.phase || standby_before != s_state.standby ||
+        standby_until_before != s_standby_until_epoch || override_before != s_work_hours_override)
+        s_persist_request = true;
 
     bool changed = before != s_timer.phase ||
                    completed_before != s_timer.completed_sessions ||
@@ -220,7 +253,8 @@ bool companion_model_tick(uint32_t elapsed_seconds)
                    day_before != s_day_key ||
                    streak_before != s_progress.streak ||
                    met_before != s_progress.goal_met_today ||
-                   missed_before != s_progress.missed_day;
+                   missed_before != s_progress.missed_day ||
+                   pet_changed || action_seconds_before != s_state.pet_action_seconds;
     xSemaphoreGive(s_lock);
     return changed;
 }
@@ -242,6 +276,21 @@ void companion_model_apply_boot_policy(bool time_valid, int64_t now_epoch, int64
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_state.time_valid = time_valid && companion_time_plausible(now_epoch);
     update_clock_locked();
+    if (s_state.time_valid) {
+        /*
+         * The RTC may boot to a stale/future value before SNTP. A persisted
+         * pet timestamp ahead of the synced wall clock would freeze catch-up
+         * and block every care action forever, so rebase future timestamps
+         * at the first valid clock. Runtime backward corrections are still
+         * handled by companion_pet_catch_up().
+         */
+        if (companion_pet_rebase_future(&s_pet, now_epoch)) {
+            ESP_LOGW(TAG, "pet timestamps ahead of clock; rebased to now");
+            s_persist_request = true;
+        }
+        if (companion_pet_catch_up(&s_pet, s_state.standby, true, now_epoch))
+            s_persist_request = true;
+    }
 
     struct tm local = {0};
     int minute = 0;
@@ -296,13 +345,23 @@ void companion_model_set_time(bool valid)
 {
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    update_clock_locked();
     bool plausible = companion_time_plausible((int64_t)time(NULL));
-    s_state.time_valid = valid && plausible;
-    if (s_state.time_valid) {
+    bool next = valid && plausible;
+    if (next == s_state.time_valid) {
+        xSemaphoreGive(s_lock);
+        return;
+    }
+    s_state.time_valid = next;
+    if (next) {
+        /*
+         * Pet catch-up belongs to the boot policy on the first sync and to
+         * the 1 Hz model tick afterwards. Doing it here raced boot restore
+         * and used the pre-policy standby state.
+         */
         rollover_today_locked(true);
         sync_state_locked();
     }
+    update_clock_locked();
     xSemaphoreGive(s_lock);
 }
 
@@ -328,6 +387,7 @@ void companion_model_persist_snapshot(companion_persist_snapshot_t *out)
     out->streak = s_progress.streak;
     out->goal_met_today = s_progress.goal_met_today;
     out->missed_day = s_progress.missed_day;
+    out->pet = s_pet;
     xSemaphoreGive(s_lock);
 }
 
@@ -349,6 +409,58 @@ void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool go
      */
     sync_state_locked();
     xSemaphoreGive(s_lock);
+}
+
+void companion_model_load_pet(const companion_pet_t *pet)
+{
+    if (!s_lock) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (pet && companion_pet_valid(pet)) s_pet = *pet;
+    else companion_pet_reset(&s_pet);
+    companion_pet_sanitize(&s_pet);
+    sync_state_locked();
+    s_persist_request = true;
+    xSemaphoreGive(s_lock);
+}
+
+companion_pet_action_result_t companion_model_pet_action(companion_pet_action_t action)
+{
+    if (!s_lock) return COMPANION_PET_ACTION_NO_TIME;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool pet_changed = false;
+    int64_t now = (int64_t)time(NULL);
+    if (s_state.time_valid)
+        pet_changed = companion_pet_catch_up(&s_pet, s_state.standby, true, now);
+
+    companion_pet_action_result_t result;
+    switch (action) {
+    case COMPANION_PET_ACTION_FEED:
+        result = companion_pet_feed(&s_pet, s_state.time_valid, now);
+        break;
+    case COMPANION_PET_ACTION_MEDICINE:
+        result = companion_pet_medicine(&s_pet, s_state.time_valid, now);
+        break;
+    case COMPANION_PET_ACTION_PLAY:
+        result = companion_pet_play(&s_pet, s_state.time_valid, now);
+        break;
+    case COMPANION_PET_ACTION_CLEAN:
+        result = companion_pet_clean(&s_pet, s_state.time_valid, now);
+        break;
+    default:
+        result = COMPANION_PET_ACTION_NO_TIME;
+        break;
+    }
+
+    if (result == COMPANION_PET_ACTION_OK || result == COMPANION_PET_ACTION_OVERFED) {
+        s_state.pet_action = action;
+        s_state.pet_action_result = result;
+        s_state.pet_action_seconds = 3;
+        pet_changed = true;
+    }
+    if (pet_changed) s_persist_request = true;
+    sync_state_locked();
+    xSemaphoreGive(s_lock);
+    return result;
 }
 
 void companion_model_set_daily_goal(uint32_t daily_goal)

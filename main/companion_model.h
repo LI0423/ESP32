@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "companion_pet.h"
 #include "companion_timer.h"
 #include "companion_progress.h"
 
@@ -20,10 +21,14 @@ typedef struct {
     bool time_valid;
     bool standby;
     bool work_hours_override;
-    bool missed_day;             /* persisted sick flag (past day unmet) */
+    bool missed_day;             /* legacy goal statistic; not pet sickness */
     int32_t day_key;
     int64_t standby_until_epoch;
-    companion_vitality_t vitality; /* full / hungry / sick */
+    companion_vitality_t vitality; /* derived from the pet: full / hungry / sick */
+    companion_pet_t pet;
+    companion_pet_action_t pet_action;
+    companion_pet_action_result_t pet_action_result;
+    uint8_t pet_action_seconds;
     char clock[9];
     char date[16];
 } companion_state_t;
@@ -39,6 +44,7 @@ typedef struct {
     uint32_t streak;
     bool goal_met_today;
     bool missed_day;
+    companion_pet_t pet;
 } companion_persist_snapshot_t;
 
 void companion_model_init(const companion_timer_t *timer);
@@ -53,6 +59,8 @@ void companion_model_load_schedule(int32_t day_key, int64_t standby_until_epoch,
                                    bool work_hours_override);
 void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today,
                                    bool missed_day);
+void companion_model_load_pet(const companion_pet_t *pet);
+companion_pet_action_result_t companion_model_pet_action(companion_pet_action_t action);
 void companion_model_set_daily_goal(uint32_t daily_goal);
 void companion_model_start_fresh_focus(void);
 void companion_model_standby_until_morning(void);

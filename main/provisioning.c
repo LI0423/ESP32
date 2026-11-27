@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "cJSON.h"
 #include "admin_cert.h"
 #include "companion_model.h"
@@ -66,6 +67,12 @@ static const char HTML_PAGE[] =
 "<input id=\"daily_goal\" type=\"number\" min=\"1\" max=\"99\" step=\"1\" value=\"4\">"
 "<label for=\"ota_url\">固件 URL</label><input id=\"ota_url\" maxlength=\"256\" "
 "placeholder=\"https://192.168.1.20/desktop_companion.bin\" autocomplete=\"off\"></div>"
+"<div class=\"card\"><h2>宠物照护</h2><div id=\"pet_summary\" class=\"sub\">正在读取宠物状态…</div>"
+"<div class=\"row\"><button id=\"feed_button\">喂食</button>"
+"<button id=\"medicine_button\" class=\"secondary\">用药</button>"
+"<button id=\"play_button\">陪玩</button>"
+"<button id=\"clean_button\" class=\"secondary\">清洁</button></div>"
+"<div class=\"sub\">食物和药品主要靠完成专注获得；喂食、陪玩和清洁有冷却时间。生病不会死亡。</div></div>"
 "<div class=\"card\"><h2>计时</h2><div class=\"row\">"
 "<button id=\"focus_button\">开始新一轮</button>"
 "<button id=\"standby_button\" class=\"secondary\">今晚先待命</button></div>"
@@ -86,7 +93,8 @@ static const char HTML_PAGE[] =
 "$('brightness').value=c.brightness;$('brightness_value').textContent=c.brightness;"
 "$('daily_goal').value=c.daily_goal||4;"
 "$('ota_url').value=c.ota_url||''}"
-"async function refresh(){try{const s=await api('/api/status');$('preview').textContent=JSON.stringify(s,null,2)}"
+"async function refresh(){try{const s=await api('/api/status');$('preview').textContent=JSON.stringify(s,null,2);"
+"if(s.pet){const p=s.pet;$('pet_summary').textContent=`${p.stage} · 年龄 ${p.age_days} 天 · 饱食 ${p.satiety} · 健康 ${p.health} · 心情 ${p.mood} · 清洁 ${p.hygiene} · 食物 ${p.food} · 药品 ${p.medicine} · XP ${p.xp}`}}"
 "catch(e){$('preview').textContent=e.message}}"
 "$('brightness').oninput=()=>{$('brightness_value').textContent=$('brightness').value};"
 "$('admin_token').value=sessionStorage.getItem('deskpal_token')||'';"
@@ -101,6 +109,13 @@ static const char HTML_PAGE[] =
 "$('message').textContent='已开始新一轮专注';await refresh()}catch(e){$('message').textContent=e.message}};"
 "$('standby_button').onclick=async()=>{try{await api('/api/timer/standby',{method:'POST',body:'{}'});"
 "$('message').textContent='已进入待命，直到下一个 08:00';await refresh()}catch(e){$('message').textContent=e.message}};"
+"async function petAction(name){try{const r=await api('/api/pet/'+name,{method:'POST',body:'{}'});"
+"$('message').textContent=r.result==='overfed'?'吃撑了，暂时不要再喂食':'照护完成：'+r.result;await refresh()}"
+"catch(e){$('message').textContent=e.message}}"
+"$('feed_button').onclick=()=>petAction('feed');"
+"$('medicine_button').onclick=()=>petAction('medicine');"
+"$('play_button').onclick=()=>petAction('play');"
+"$('clean_button').onclick=()=>petAction('clean');"
 "$('restart_button').onclick=async()=>{try{await api('/api/restart',{method:'POST',body:'{}'});"
 "$('message').textContent='正在重启…'}catch(e){$('message').textContent=e.message}};"
 "$('ota_button').onclick=async()=>{try{const url=$('ota_url').value.trim();if(!url)throw new Error('请填写固件 URL');"
@@ -144,6 +159,7 @@ static esp_err_t send_error(httpd_req_t *request, int status, const char *messag
                                   status == 404 ? "404 Not Found" :
                                   status == 405 ? "405 Method Not Allowed" :
                                   status == 408 ? "408 Request Timeout" :
+                                  status == 409 ? "409 Conflict" :
                                   status == 411 ? "411 Length Required" :
                                   status == 413 ? "413 Payload Too Large" :
                                   status == 415 ? "415 Unsupported Media Type" :
@@ -341,6 +357,44 @@ static const char *ota_state_name(pad_ota_state_t state)
     return state >= PAD_OTA_IDLE && state <= PAD_OTA_FAILED ? names[state] : "unknown";
 }
 
+static uint32_t cooldown_remaining(int64_t last_epoch, uint32_t cooldown_seconds)
+{
+    int64_t now = (int64_t)time(NULL);
+    if (last_epoch <= 0) return 0;
+    if (now < last_epoch) return cooldown_seconds;
+    uint64_t elapsed = (uint64_t)(now - last_epoch);
+    return elapsed >= cooldown_seconds ? 0u : cooldown_seconds - (uint32_t)elapsed;
+}
+
+static cJSON *pet_json(const companion_pet_t *pet)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+    cJSON_AddStringToObject(root, "stage",
+        companion_pet_stage_name((companion_pet_stage_t)pet->stage));
+    cJSON_AddNumberToObject(root, "age_days", pet->age_days);
+    cJSON_AddNumberToObject(root, "satiety", pet->satiety);
+    cJSON_AddNumberToObject(root, "health", pet->health);
+    cJSON_AddNumberToObject(root, "mood", pet->mood);
+    cJSON_AddNumberToObject(root, "hygiene", pet->hygiene);
+    cJSON_AddNumberToObject(root, "food", pet->food);
+    cJSON_AddNumberToObject(root, "medicine", pet->medicine);
+    cJSON_AddNumberToObject(root, "xp", pet->xp);
+    cJSON_AddNumberToObject(root, "focus_count", pet->focus_count);
+    cJSON_AddBoolToObject(root, "sick", pet->sick);
+    cJSON_AddStringToObject(root, "sick_reason",
+        companion_pet_sick_reason_name((companion_pet_sick_reason_t)pet->sick_reason));
+    cJSON_AddNumberToObject(root, "feed_cooldown_seconds",
+        cooldown_remaining(pet->last_fed_epoch, COMPANION_PET_FEED_COOLDOWN_SECONDS));
+    cJSON_AddNumberToObject(root, "medicine_cooldown_seconds",
+        cooldown_remaining(pet->last_medicine_epoch, COMPANION_PET_MEDICINE_COOLDOWN_SECONDS));
+    cJSON_AddNumberToObject(root, "play_cooldown_seconds",
+        cooldown_remaining(pet->last_played_epoch, COMPANION_PET_PLAY_COOLDOWN_SECONDS));
+    cJSON_AddNumberToObject(root, "clean_cooldown_seconds",
+        cooldown_remaining(pet->last_cleaned_epoch, COMPANION_PET_CLEAN_COOLDOWN_SECONDS));
+    return root;
+}
+
 static esp_err_t status_get_handler(httpd_req_t *request)
 {
     companion_state_t state;
@@ -367,10 +421,14 @@ static esp_err_t status_get_handler(httpd_req_t *request)
     cJSON *root = cJSON_CreateObject();
     cJSON *timer = cJSON_AddObjectToObject(root, "timer");
     cJSON *ota_json = cJSON_AddObjectToObject(root, "ota");
-    if (!root || !timer || !ota_json) {
+    cJSON *pet = root ? pet_json(&state.pet) : NULL;
+    if (!root || !timer || !ota_json || !pet) {
         cJSON_Delete(root);
+        cJSON_Delete(pet);
         return send_error(request, 500, "out of memory");
     }
+    cJSON_AddItemToObject(root, "pet", pet);
+    cJSON_AddStringToObject(root, "vitality", companion_vitality_name(state.vitality));
     cJSON_AddBoolToObject(root, "connected", companion_network_is_connected());
     cJSON_AddStringToObject(root, "wifi_mode", wifi_mode_name(mode));
     cJSON_AddStringToObject(root, "ip", ip);
@@ -537,6 +595,57 @@ static esp_err_t timer_standby_post_handler(httpd_req_t *request)
     return send_json(request, response);
 }
 
+static esp_err_t pet_action_post_handler(httpd_req_t *request)
+{
+    esp_err_t preflight = reject_oversized_body(request);
+    if (preflight != ESP_OK) return preflight;
+    esp_err_t auth = require_admin(request);
+    if (auth != ESP_OK) return auth;
+    if (request->content_len > 0) {
+        cJSON *root = read_json_body(request);
+        if (!root) return ESP_OK;
+        cJSON_Delete(root);
+    }
+
+    companion_pet_action_t action;
+    const char *action_name = NULL;
+    if (!strcmp(request->uri, "/api/pet/feed")) {
+        action = COMPANION_PET_ACTION_FEED;
+        action_name = "feed";
+    } else if (!strcmp(request->uri, "/api/pet/medicine")) {
+        action = COMPANION_PET_ACTION_MEDICINE;
+        action_name = "medicine";
+    } else if (!strcmp(request->uri, "/api/pet/play")) {
+        action = COMPANION_PET_ACTION_PLAY;
+        action_name = "play";
+    } else if (!strcmp(request->uri, "/api/pet/clean")) {
+        action = COMPANION_PET_ACTION_CLEAN;
+        action_name = "clean";
+    } else {
+        return send_error(request, 404, "unknown pet action");
+    }
+
+    companion_pet_action_result_t result = companion_model_pet_action(action);
+    if (result != COMPANION_PET_ACTION_OK && result != COMPANION_PET_ACTION_OVERFED)
+        return send_error(request, 409, companion_pet_action_result_name(result));
+
+    companion_state_t state;
+    companion_model_snapshot(&state);
+    cJSON *response = cJSON_CreateObject();
+    cJSON *pet = response ? pet_json(&state.pet) : NULL;
+    if (!response || !pet) {
+        cJSON_Delete(response);
+        cJSON_Delete(pet);
+        return send_error(request, 500, "out of memory");
+    }
+    cJSON_AddBoolToObject(response, "applied", true);
+    cJSON_AddStringToObject(response, "action", action_name);
+    cJSON_AddStringToObject(response, "result",
+                            companion_pet_action_result_name(result));
+    cJSON_AddItemToObject(response, "pet", pet);
+    return send_json(request, response);
+}
+
 void companion_provisioning_start(void)
 {
     if (s_server) return;
@@ -544,12 +653,20 @@ void companion_provisioning_start(void)
     config.httpd.stack_size = 12288;
     config.httpd.recv_wait_timeout = 2;
     config.httpd.send_wait_timeout = 5;
-    config.httpd.max_open_sockets = 1;
-    config.httpd.max_uri_handlers = 11;
+    /* Browsers open several sockets at once (speculative preconnect, favicon,
+     * parallel fetches). With a single slot the extra connections are accepted
+     * and then dropped without a response, which the browser reports as
+     * ERR_SOCKET_NOT_CONNECTED and which also blocks concurrent clients. */
+    config.httpd.max_open_sockets = 3;
+    config.httpd.lru_purge_enable = true;
+    config.httpd.max_uri_handlers = 15;
+    /* mbedtls PEM parsing requires the length to include the trailing NUL,
+     * so pass the full array size. The generated header ends both arrays with
+     * an explicit 0x00, and a plain string literal carries an implicit one. */
     config.servercert = admin_server_cert;
-    config.servercert_len = sizeof(admin_server_cert) - 1;
+    config.servercert_len = sizeof(admin_server_cert);
     config.prvtkey_pem = admin_server_key;
-    config.prvtkey_len = sizeof(admin_server_key) - 1;
+    config.prvtkey_len = sizeof(admin_server_key);
     if (httpd_ssl_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "HTTPS server start failed");
         return;
@@ -563,6 +680,10 @@ void companion_provisioning_start(void)
     httpd_uri_t restart = {.uri = "/api/restart", .method = HTTP_POST, .handler = restart_post_handler};
     httpd_uri_t focus = {.uri = "/api/timer/focus", .method = HTTP_POST, .handler = timer_focus_post_handler};
     httpd_uri_t standby = {.uri = "/api/timer/standby", .method = HTTP_POST, .handler = timer_standby_post_handler};
+    httpd_uri_t feed = {.uri = "/api/pet/feed", .method = HTTP_POST, .handler = pet_action_post_handler};
+    httpd_uri_t medicine = {.uri = "/api/pet/medicine", .method = HTTP_POST, .handler = pet_action_post_handler};
+    httpd_uri_t play = {.uri = "/api/pet/play", .method = HTTP_POST, .handler = pet_action_post_handler};
+    httpd_uri_t clean = {.uri = "/api/pet/clean", .method = HTTP_POST, .handler = pet_action_post_handler};
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &config_get);
     httpd_register_uri_handler(s_server, &config_post);
@@ -572,5 +693,9 @@ void companion_provisioning_start(void)
     httpd_register_uri_handler(s_server, &restart);
     httpd_register_uri_handler(s_server, &focus);
     httpd_register_uri_handler(s_server, &standby);
+    httpd_register_uri_handler(s_server, &feed);
+    httpd_register_uri_handler(s_server, &medicine);
+    httpd_register_uri_handler(s_server, &play);
+    httpd_register_uri_handler(s_server, &clean);
     ESP_LOGI(TAG, "settings HTTPS server started");
 }

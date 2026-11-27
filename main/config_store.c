@@ -1,8 +1,10 @@
 #include "config_store.h"
 
 #include "companion_progress.h"
+#include "companion_schedule.h"
 
 #include <limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +18,9 @@
 
 #define TAG "companion_cfg"
 #define NVS_NAMESPACE "agentpad"
+
+_Static_assert(COMPANION_PET_STORE_SIZE <= 56,
+               "pet blob must fit a three-entry BLOB_DATA span plus its index");
 
 #ifndef CONFIG_PAD_DEFAULT_BRIGHTNESS
 #define CONFIG_PAD_DEFAULT_BRIGHTNESS 75
@@ -308,7 +313,7 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     err = read_i32(nvs, "tm_version", &version, 0);
     int phase = -1, remaining = -1, completed = -1;
     int focus = -1, break_seconds = -1, celebrate = -1;
-    if (err == ESP_OK && version == 1) {
+    if (err == ESP_OK && (version == 1 || version == 2)) {
         err = read_i32(nvs, "tm_phase", &phase, -1);
         if (err == ESP_OK) err = read_i32(nvs, "tm_remaining", &remaining, -1);
         if (err == ESP_OK) err = read_i32(nvs, "tm_completed", &completed, -1);
@@ -320,7 +325,7 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     int64_t standby_until = 0;
     int day_key = 0;
     int override = 0;
-    if (err == ESP_OK && version == 1) {
+    if (err == ESP_OK && (version == 1 || version == 2)) {
         err = nvs_get_i64(nvs, "tm_saved_epoch", &saved_epoch);
         if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_TYPE_MISMATCH ||
             err == ESP_ERR_INVALID_SIZE) {
@@ -342,7 +347,7 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     int streak = 0;
     int goal_met = 0;
     int missed = 0;
-    if (err == ESP_OK && version == 1) {
+    if (err == ESP_OK && (version == 1 || version == 2)) {
         err = read_i32(nvs, "tm_streak", &streak, 0);
         if (err == ESP_OK) err = read_i32(nvs, "tm_goal_met", &goal_met, 0);
         /* "tm_missed" is 9 chars, inside the 15-char NVS key limit. */
@@ -362,7 +367,7 @@ esp_err_t companion_store_load_timer(companion_timer_record_t *out)
     bool remaining_ok = phase == 3
                             ? remaining == 0
                             : (remaining > 0 && (uint32_t)remaining <= phase_total);
-    bool valid = version == 1 && phase >= 0 && phase <= 3 && remaining_ok &&
+    bool valid = (version == 1 || version == 2) && phase >= 0 && phase <= 3 && remaining_ok &&
                  completed >= 0 && completed <= 1000000 &&
                  focus >= 5 && focus <= 86400 &&
                  break_seconds >= 5 && break_seconds <= 86400 &&
@@ -412,5 +417,213 @@ esp_err_t companion_store_save_timer(const companion_timer_record_t *record)
     if (err == ESP_OK) err = nvs_set_i32(nvs, "tm_missed", record->missed_day ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
+    return err;
+}
+
+static void wire_put_u8(uint8_t *wire, size_t *cursor, uint8_t value)
+{
+    wire[(*cursor)++] = value;
+}
+
+static void wire_put_u16(uint8_t *wire, size_t *cursor, uint16_t value)
+{
+    wire[(*cursor)++] = (uint8_t)value;
+    wire[(*cursor)++] = (uint8_t)(value >> 8u);
+}
+
+static void wire_put_u32(uint8_t *wire, size_t *cursor, uint32_t value)
+{
+    for (unsigned i = 0; i < 4; i++) wire[(*cursor)++] = (uint8_t)(value >> (i * 8u));
+}
+
+static void wire_put_i32(uint8_t *wire, size_t *cursor, int32_t value)
+{
+    wire_put_u32(wire, cursor, (uint32_t)value);
+}
+
+static void wire_put_epoch(uint8_t *wire, size_t *cursor, int64_t value)
+{
+    wire_put_u32(wire, cursor, (uint32_t)value);
+}
+
+static bool wire_get_u8(const uint8_t *wire, size_t *cursor, uint8_t *out)
+{
+    if (*cursor >= COMPANION_PET_WIRE_SIZE) return false;
+    *out = wire[(*cursor)++];
+    return true;
+}
+
+static bool wire_get_u16(const uint8_t *wire, size_t *cursor, uint16_t *out)
+{
+    if (*cursor > COMPANION_PET_WIRE_SIZE - 2u) return false;
+    uint16_t value = (uint16_t)wire[*cursor] | ((uint16_t)wire[*cursor + 1u] << 8u);
+    *cursor += 2;
+    *out = value;
+    return true;
+}
+
+static bool wire_get_u32(const uint8_t *wire, size_t *cursor, uint32_t *out)
+{
+    if (*cursor > COMPANION_PET_WIRE_SIZE - 4u) return false;
+    uint32_t value = 0;
+    for (unsigned i = 0; i < 4; i++) value |= (uint32_t)wire[(*cursor)++] << (i * 8u);
+    *out = value;
+    return true;
+}
+
+static bool wire_get_i32(const uint8_t *wire, size_t *cursor, int32_t *out)
+{
+    uint32_t value = 0;
+    if (!wire_get_u32(wire, cursor, &value)) return false;
+    *out = (int32_t)value;
+    return true;
+}
+
+static bool wire_get_epoch(const uint8_t *wire, size_t *cursor, int64_t *out)
+{
+    uint32_t value = 0;
+    if (!wire_get_u32(wire, cursor, &value)) return false;
+    if (value != 0 && !companion_time_plausible(value)) return false;
+    *out = value;
+    return true;
+}
+
+static size_t encode_pet(uint8_t *wire, const companion_pet_t *pet)
+{
+    size_t cursor = 0;
+    wire_put_u8(wire, &cursor, pet->satiety);
+    wire_put_u8(wire, &cursor, pet->health);
+    wire_put_u8(wire, &cursor, pet->mood);
+    wire_put_u8(wire, &cursor, pet->hygiene);
+    wire_put_u8(wire, &cursor, pet->food);
+    wire_put_u8(wire, &cursor, pet->medicine);
+    wire_put_u32(wire, &cursor, pet->xp);
+    wire_put_u32(wire, &cursor, pet->focus_count);
+    wire_put_i32(wire, &cursor, pet->born_day);
+    wire_put_u16(wire, &cursor, (uint16_t)pet->age_days);
+    wire_put_u8(wire, &cursor, pet->sick ? 1u : 0u);
+    wire_put_u8(wire, &cursor, pet->sick_reason);
+    wire_put_epoch(wire, &cursor, pet->last_fed_epoch);
+    wire_put_epoch(wire, &cursor, pet->last_medicine_epoch);
+    wire_put_epoch(wire, &cursor, pet->last_played_epoch);
+    wire_put_epoch(wire, &cursor, pet->last_cleaned_epoch);
+    wire_put_epoch(wire, &cursor, pet->last_update_epoch);
+    wire_put_epoch(wire, &cursor, pet->hungry_since_epoch);
+    wire_put_epoch(wire, &cursor, pet->dirty_since_epoch);
+    wire_put_epoch(wire, &cursor, pet->overfeed_window_epoch);
+    wire_put_u8(wire, &cursor, pet->overfeed_count);
+    /* stage and fractional carry are derived/recomputed; do not persist them. */
+    return cursor;
+}
+
+static bool decode_pet(companion_pet_t *pet, const uint8_t *wire)
+{
+    companion_pet_reset(pet);
+    size_t cursor = 0;
+    uint8_t sick = 0;
+    uint16_t age_days = 0;
+    bool ok = wire_get_u8(wire, &cursor, &pet->satiety) &&
+              wire_get_u8(wire, &cursor, &pet->health) &&
+              wire_get_u8(wire, &cursor, &pet->mood) &&
+              wire_get_u8(wire, &cursor, &pet->hygiene) &&
+              wire_get_u8(wire, &cursor, &pet->food) &&
+              wire_get_u8(wire, &cursor, &pet->medicine) &&
+              wire_get_u32(wire, &cursor, &pet->xp) &&
+              wire_get_u32(wire, &cursor, &pet->focus_count) &&
+              wire_get_i32(wire, &cursor, &pet->born_day) &&
+              wire_get_u16(wire, &cursor, &age_days) &&
+              wire_get_u8(wire, &cursor, &sick) &&
+              wire_get_u8(wire, &cursor, &pet->sick_reason) &&
+              wire_get_epoch(wire, &cursor, &pet->last_fed_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->last_medicine_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->last_played_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->last_cleaned_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->last_update_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->hungry_since_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->dirty_since_epoch) &&
+              wire_get_epoch(wire, &cursor, &pet->overfeed_window_epoch) &&
+              wire_get_u8(wire, &cursor, &pet->overfeed_count);
+    if (!ok || cursor != COMPANION_PET_WIRE_SIZE || sick > 1 || age_days > 36500)
+        return false;
+    pet->age_days = age_days;
+    pet->sick = sick == 1;
+    companion_pet_sanitize(pet);
+    return companion_pet_valid(pet);
+}
+
+esp_err_t companion_store_load_pet(companion_pet_record_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+    nvs_handle_t nvs = 0;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
+    if (err != ESP_OK) return err;
+
+    uint8_t wire[COMPANION_PET_STORE_SIZE];
+    size_t length = sizeof(wire);
+    err = nvs_get_blob(nvs, "pet_state", wire, &length);
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_TYPE_MISMATCH ||
+        err == ESP_ERR_INVALID_SIZE || err == ESP_ERR_NVS_INVALID_LENGTH) {
+        err = ESP_OK;
+        length = 0;
+    }
+    nvs_close(nvs);
+    if (err != ESP_OK) return err;
+    if (length != sizeof(wire) || wire[0] != COMPANION_PET_STORE_VERSION) return ESP_OK;
+    if (!decode_pet(&out->pet, wire + 1)) {
+        ESP_LOGW(TAG, "stored pet state invalid; using migration defaults");
+        return ESP_OK;
+    }
+    out->valid = true;
+    return ESP_OK;
+}
+
+static void erase_legacy_statuspad_keys(void)
+{
+    static const char *const keys[] = {
+        "oc_url", "oc_token", "tool_map", "weather_city", "calendar_ics",
+        "disp_pack", "rotate_sec", "page_count",
+        "page_0", "page_1", "page_2", "page_3", "page_4", "page_5", "page_6", "page_7",
+        "cal_r_gain", "cal_g_gain", "cal_b_gain",
+        "cal_r_off", "cal_g_off", "cal_b_off",
+    };
+    nvs_handle_t nvs = 0;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        esp_err_t err = nvs_erase_key(nvs, keys[i]);
+        if (err == ESP_OK) changed = true;
+        else if (err != ESP_ERR_NVS_NOT_FOUND)
+            ESP_LOGW(TAG, "legacy key cleanup failed for %s: %s", keys[i], esp_err_to_name(err));
+    }
+    if (changed) {
+        esp_err_t err = nvs_commit(nvs);
+        if (err == ESP_OK) ESP_LOGI(TAG, "removed obsolete DesktopStatusPad keys for pet schema v2");
+        else ESP_LOGW(TAG, "legacy key cleanup commit failed: %s", esp_err_to_name(err));
+    }
+    nvs_close(nvs);
+}
+
+esp_err_t companion_store_save_pet(const companion_pet_record_t *record)
+{
+    if (!record || !record->valid || !companion_pet_valid(&record->pet))
+        return ESP_ERR_INVALID_ARG;
+    uint8_t wire[COMPANION_PET_STORE_SIZE];
+    wire[0] = COMPANION_PET_STORE_VERSION;
+    if (encode_pet(wire + 1, &record->pet) != COMPANION_PET_WIRE_SIZE)
+        return ESP_ERR_INVALID_SIZE;
+    nvs_handle_t nvs = 0;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) return err;
+    err = nvs_set_blob(nvs, "pet_state", wire, sizeof(wire));
+    if (err == ESP_ERR_NVS_NOT_ENOUGH_SPACE) {
+        nvs_close(nvs);
+        erase_legacy_statuspad_keys();
+        err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+        if (err == ESP_OK) err = nvs_set_blob(nvs, "pet_state", wire, sizeof(wire));
+    }
+    if (err == ESP_OK) err = nvs_commit(nvs);
+    if (nvs != 0) nvs_close(nvs);
     return err;
 }

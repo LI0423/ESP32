@@ -26,6 +26,11 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 # The Kconfig default is 1.
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
+# The board exposes its maintenance/control port as USB Serial/JTAG CDC.
+# Force the same console on clean checkouts so `status` and pet commands work.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
 # provisioning.c calls httpd_ssl_start(). This option has no Kconfig default;
 # the HTTPS server example sets it explicitly.
 CONFIG_ESP_HTTPS_SERVER_ENABLE=y

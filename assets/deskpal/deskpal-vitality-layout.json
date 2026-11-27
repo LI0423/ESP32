@@ -1,0 +1,36 @@
+{
+  "canvas": [
+    240,
+    240
+  ],
+  "character": {
+    "w": 128,
+    "h": 128,
+    "x": 56,
+    "y": 43
+  },
+  "vitality_sprites": {
+    "full": "deskpal-vitality-full-128.png",
+    "hungry": "deskpal-vitality-hungry-128.png",
+    "sick": "deskpal-vitality-sick-128.png",
+    "format": "indexed PNG, 128x128, shared <=32 colors including transparent, no dithering, no antialiasing",
+    "shared_palette": "deskpal-vitality-shared-palette.png",
+    "registration": "Content is fitted to the same box as the existing timer-state sprites, approx (15,11)-(110,122), so swapping hungry/sick onto (56,43) stays the same size."
+  },
+  "compositing": {
+    "full": "When vitality is full, keep the existing FOCUS/BREAK/COMPLETE/STANDBY character sprites. The delivered full sprite is a healthy reference (optional idle), not a replacement for the four timer faces.",
+    "hungry_or_sick": "When vitality is hungry or sick, blit the matching vitality sprite at (56, 43) in place of the timer-state character. Stage label, background color, time, Today N/G, streak, and online dot stay as they are.",
+    "hud": "Do not add a status bar. Do not change Today N/G or streak positions.",
+    "standby_dim": "STANDBY dimming remains backlight, not baked into the sprite."
+  },
+  "background": {
+    "FOCUS": "#492A15",
+    "BREAK": "#437059",
+    "COMPLETE": "#E3A22C",
+    "STANDBY": "#0F1629"
+  },
+  "notes": [
+    "Three vitality looks only; no medicine, no feed icon, no new HUD.",
+    "ASCII HUD and Press Start 2P unchanged."
+  ]
+}

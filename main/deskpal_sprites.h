@@ -37,6 +37,8 @@ typedef enum {
     DESKPAL_SPRITE_BREAK,
     DESKPAL_SPRITE_COMPLETE,
     DESKPAL_SPRITE_STANDBY,
+    DESKPAL_SPRITE_HUNGRY,
+    DESKPAL_SPRITE_SICK,
     DESKPAL_SPRITE_COUNT
 } deskpal_sprite_id_t;
 
@@ -45,11 +47,17 @@ extern "C" {
 #endif
 
 extern const uint16_t deskpal_palette[DESKPAL_PALETTE_LEN];
+/* Hungry/sick share their own 32-color palette so the warm timer-face colors
+ * above stay byte-identical. Index 0 is transparent in both palettes. */
+extern const uint16_t deskpal_vitality_palette[DESKPAL_PALETTE_LEN];
 extern const uint8_t deskpal_sprite_focus[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
 extern const uint8_t deskpal_sprite_break[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
 extern const uint8_t deskpal_sprite_complete[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
 extern const uint8_t deskpal_sprite_standby[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
+extern const uint8_t deskpal_sprite_hungry[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
+extern const uint8_t deskpal_sprite_sick[DESKPAL_CHAR_W * DESKPAL_CHAR_H];
 const uint8_t *deskpal_sprite_data(deskpal_sprite_id_t id);
+const uint16_t *deskpal_sprite_palette(deskpal_sprite_id_t id);
 
 #ifdef __cplusplus
 }

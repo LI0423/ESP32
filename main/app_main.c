@@ -38,6 +38,7 @@ static void publish_status(void)
     int length = snprintf(line, sizeof(line),
         "{\"v\":1,\"type\":\"status\",\"phase\":\"%s\",\"remaining\":%lu,"
         "\"total\":%lu,\"completed\":%lu,\"goal\":%lu,\"streak\":%lu,"
+        "\"vitality\":\"%s\","
         "\"online\":%s,\"time_valid\":%s,"
         "\"standby\":%s,\"clock\":\"%s\",\"date\":\"%s\"}\n",
         companion_phase_name(state.phase),
@@ -46,6 +47,7 @@ static void publish_status(void)
         (unsigned long)state.completed_sessions,
         (unsigned long)state.daily_goal,
         (unsigned long)state.streak,
+        companion_vitality_name(state.vitality),
         state.online ? "true" : "false",
         state.time_valid ? "true" : "false",
         state.standby ? "true" : "false",
@@ -76,6 +78,7 @@ static void save_current_timer(void)
         .work_hours_override = snap.work_hours_override,
         .streak = snap.streak,
         .goal_met_today = snap.goal_met_today,
+        .missed_day = snap.missed_day,
     };
     esp_err_t err = companion_store_save_timer(&record);
     if (err == ESP_OK) s_timer_dirty = false;
@@ -269,7 +272,8 @@ void app_main(void)
     companion_model_set_configured_brightness(brightness);
     companion_model_load_schedule(s_boot_record.day_key, s_boot_record.standby_until_epoch,
                                   s_boot_record.work_hours_override);
-    companion_model_load_progress(daily_goal, s_boot_record.streak, s_boot_record.goal_met_today);
+    companion_model_load_progress(daily_goal, s_boot_record.streak, s_boot_record.goal_met_today,
+                                  s_boot_record.missed_day);
     companion_ui_init();
     pad_ota_init();
 

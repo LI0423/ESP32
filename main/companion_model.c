@@ -54,6 +54,8 @@ static void sync_state_locked(void)
     s_state.work_hours_override = s_work_hours_override;
     s_state.day_key = s_day_key;
     s_state.standby_until_epoch = s_standby_until_epoch;
+    s_state.missed_day = s_progress.missed_day;
+    s_state.vitality = companion_progress_vitality(&s_progress, s_state.time_valid);
 }
 
 static void mark_brightness_locked(void)
@@ -65,9 +67,10 @@ static void mark_brightness_locked(void)
     }
 }
 
-static void note_progress_edit_locked(uint32_t streak_before, bool met_before)
+static void note_progress_edit_locked(uint32_t streak_before, bool met_before, bool missed_before)
 {
-    if (streak_before != s_progress.streak || met_before != s_progress.goal_met_today)
+    if (streak_before != s_progress.streak || met_before != s_progress.goal_met_today ||
+        missed_before != s_progress.missed_day)
         s_persist_request = true;
 }
 
@@ -77,9 +80,10 @@ static void sync_progress_count_locked(void)
     if (s_day_key == 0) return;
     uint32_t streak_before = s_progress.streak;
     bool met_before = s_progress.goal_met_today;
+    bool missed_before = s_progress.missed_day;
     s_progress.day_key = s_day_key;
     companion_progress_sync(&s_progress, s_timer.completed_sessions);
-    note_progress_edit_locked(streak_before, met_before);
+    note_progress_edit_locked(streak_before, met_before, missed_before);
 }
 
 static void rollover_today_locked(bool time_valid)
@@ -92,6 +96,7 @@ static void rollover_today_locked(bool time_valid)
 
     uint32_t streak_before = s_progress.streak;
     bool met_before = s_progress.goal_met_today;
+    bool missed_before = s_progress.missed_day;
     uint32_t completed_before = s_timer.completed_sessions;
     int32_t day_before = s_day_key;
     int gap = 0;
@@ -104,6 +109,7 @@ static void rollover_today_locked(bool time_valid)
     s_timer.completed_sessions = s_progress.completed;
     s_day_key = s_progress.day_key;
     if (streak_before != s_progress.streak || met_before != s_progress.goal_met_today ||
+        missed_before != s_progress.missed_day ||
         completed_before != s_timer.completed_sessions || day_before != s_day_key)
         s_persist_request = true;
 }
@@ -195,6 +201,7 @@ bool companion_model_tick(uint32_t elapsed_seconds)
     int32_t day_before = s_day_key;
     uint32_t streak_before = s_progress.streak;
     bool met_before = s_progress.goal_met_today;
+    bool missed_before = s_progress.missed_day;
 
     rollover_today_locked(s_state.time_valid);
     apply_schedule_locked();
@@ -212,7 +219,8 @@ bool companion_model_tick(uint32_t elapsed_seconds)
                    override_before != s_work_hours_override ||
                    day_before != s_day_key ||
                    streak_before != s_progress.streak ||
-                   met_before != s_progress.goal_met_today;
+                   met_before != s_progress.goal_met_today ||
+                   missed_before != s_progress.missed_day;
     xSemaphoreGive(s_lock);
     return changed;
 }
@@ -319,16 +327,19 @@ void companion_model_persist_snapshot(companion_persist_snapshot_t *out)
     out->standby = s_timer.phase == COMPANION_PHASE_STANDBY;
     out->streak = s_progress.streak;
     out->goal_met_today = s_progress.goal_met_today;
+    out->missed_day = s_progress.missed_day;
     xSemaphoreGive(s_lock);
 }
 
-void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today)
+void companion_model_load_progress(uint32_t daily_goal, uint32_t streak, bool goal_met_today,
+                                   bool missed_day)
 {
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_progress.goal = companion_progress_sanitize_goal(daily_goal);
     s_progress.streak = streak > 1000000u ? 0u : streak;
     s_progress.goal_met_today = goal_met_today;
+    s_progress.missed_day = missed_day;
     s_progress.completed = s_timer.completed_sessions;
     s_progress.day_key = s_day_key;
     /*
@@ -346,9 +357,10 @@ void companion_model_set_daily_goal(uint32_t daily_goal)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     uint32_t streak_before = s_progress.streak;
     bool met_before = s_progress.goal_met_today;
+    bool missed_before = s_progress.missed_day;
     companion_progress_set_goal(&s_progress, daily_goal);
     sync_state_locked();
-    note_progress_edit_locked(streak_before, met_before);
+    note_progress_edit_locked(streak_before, met_before, missed_before);
     xSemaphoreGive(s_lock);
 }
 
